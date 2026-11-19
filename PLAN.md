@@ -10,9 +10,9 @@
 
 ## Поточна активна задача (Active Task)
 
-- **Статус:** `Чернетка — очікує підтвердження`
-- **Файл плану:** [001-be-core-config-and-arch-test.md](./plans/001-be-core-config-and-arch-test.md)
-- **Короткий опис:** `[BE-Core]` Ініціалізація `go.mod`, `.env.example`, `Makefile`, єдиного конфігу `internal/core/config.go`, реєстру помилок `internal/core/errors.go`, DRY-хелперів `internal/core/httputil.go` та Full-Stack автотесту архітектури `arch_test.go`.
+- **Статус:** `Немає активної задачі (очікує старту Плану #002)`
+- **Файл плану:** — *(наступний: `plans/002-be-core-db-and-migrations.md`)*
+- **Короткий опис:** —
 
 ---
 
@@ -21,6 +21,8 @@
 | № | Назва задачі | Модуль / Область | Файл в архіві | Статус |
 |---|--------------|------------------|---------------|--------|
 | 000 | Проєктування архітектури, специфікації та правил агентів | `docs` / `rules` | [000-architecture-and-specs.md](./plans/archive/000-architecture-and-specs.md) | Закрито |
+| 001 | Каркас Go, Конфіг `.env`, `errors.go`, `httputil.go` та `arch_test.go` | `BE-Core` | [001-be-core-config-and-arch-test.md](./plans/archive/001-be-core-config-and-arch-test.md) | Закрито |
+| 001a | Виправлення за код-ревю (`Makefile`, `arch_test.go`, `config.go`) | `BE-Core` | [001a-fix-makefile-and-arch-test-review.md](./plans/archive/001a-fix-makefile-and-arch-test-review.md) | Закрито |
 
 ---
 
@@ -35,7 +37,7 @@
 
 ### Частина А: Бекенд — Ядро (`internal/core`) та Модуль Фінансів (`internal/modules/finance`)
 
-#### [ ] План `#001` (`[BE-Core]`): Каркас Go, Конфіг `.env` та Автотест Архітектури (`arch_test.go`)
+#### [x] План `#001` (`[BE-Core]`): Каркас Go, Конфіг `.env` та Автотест Архітектури (`arch_test.go`)
 - **Файли:** `go.mod`, `.env.example`, `Makefile`, `arch_test.go`, `internal/core/config.go`, `internal/core/errors.go`, `internal/core/httputil.go`, `internal/core/config_test.go`.
 - **Зміст:**
   - Єдина точка зчитування `.env` (`config.go`) та коментований `.env.example`.
@@ -95,7 +97,7 @@
 - **Зміст:**
   - Налаштування Vite + React + TypeScript + Tailwind CSS + Lucide + `vite-plugin-pwa` + Capacitor.
   - Єдиний конфіг `web/src/core/config.ts` (єдине місце для `import.meta.env`).
-  - Двомовна система `i18n` (`uk.ts` та `en.ts` зі суворою перевіркою типів `TranslationSchema`, мапінгом усіх `ERR_*` та системних категорій).
+  - Двомовна система `i18n` (`uk.ts` та `en.ts` зі суворою перевіркою типів `TranslationSchema`, мапінгом усіх `ERR_*` та системних категорій) + правило ESLint проти захардкоджених літералів у JSX (`no-literal-string`).
   - Спільні DRY-утиліти (`formatMoneyMinor`, `formatDate`, `getCategoryLabel`).
 - **Перевірка:** `npm run build` (`tsc`) та `go test ./...` (`arch_test.go` для `web/src/`).
 
