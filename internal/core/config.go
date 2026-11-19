@@ -12,8 +12,8 @@ import (
 // Значення за замовчуванням для операційних параметрів (перевизначаються через .env або змінні ОС).
 const (
 	defaultPort                   = 8080
-	defaultDBPath                 = "data.db"
-	defaultDBBusyTimeoutMs        = 5000
+	defaultDBMaxConns             = 10
+	defaultDBConnectTimeoutSec    = 5
 	defaultHTTPTimeoutSec         = 30
 	defaultMaxJSONBodyBytes       = 1024 * 1024 // 1 МБ
 	defaultJWTTTLHours            = 168         // 7 діб
@@ -27,6 +27,8 @@ const (
 	defaultTGLinkTokenTTLMin      = 10
 	defaultTimezone               = "Europe/Kyiv"
 	defaultCurrency               = "UAH"
+	defaultLogDir                 = "logs"
+	defaultLogRetentionDays       = 0
 
 	minJWTSecretLength     = 16
 	insecureJWTPlaceholder = "change-me-in-production-min-16-chars"
@@ -35,8 +37,9 @@ const (
 // Config зберігає всі операційні налаштування програми, зчитані з .env або змінних середовища.
 type Config struct {
 	Port               int
-	DBPath             string
-	DBBusyTimeoutMs    int
+	DatabaseURL        string
+	DBMaxConns         int32
+	DBConnectTimeout   time.Duration
 	HTTPTimeout        time.Duration
 	MaxJSONBodyBytes   int64
 	JWTSecret          string
@@ -54,6 +57,8 @@ type Config struct {
 	DefaultTimezone    string
 	DefaultLocation    *time.Location
 	DefaultCurrency    string
+	LogDir             string
+	LogRetentionDays   int
 }
 
 // LoadConfig завантажує змінні з .env файлу (у локальну мапу без мутації os.Setenv) та оточення ОС, підставляє дефолти й валідує значення.
@@ -72,7 +77,17 @@ func LoadConfig(envFilePath string) (*Config, error) {
 		return nil, err
 	}
 
-	dbBusyMs, err := envPositiveInt(dotEnv, "DB_BUSY_TIMEOUT_MS", defaultDBBusyTimeoutMs)
+	databaseURL := envString(dotEnv, "DATABASE_URL", "")
+	if databaseURL == "" {
+		return nil, fmt.Errorf("invalid DATABASE_URL: must be explicitly set")
+	}
+
+	dbMaxConns, err := envPositiveInt(dotEnv, "DB_MAX_CONNS", defaultDBMaxConns)
+	if err != nil {
+		return nil, err
+	}
+
+	dbConnectTimeoutSec, err := envPositiveInt(dotEnv, "DB_CONNECT_TIMEOUT_SEC", defaultDBConnectTimeoutSec)
 	if err != nil {
 		return nil, err
 	}
@@ -143,10 +158,17 @@ func LoadConfig(envFilePath string) (*Config, error) {
 		return nil, fmt.Errorf("invalid DEFAULT_CURRENCY %q: must be 3 uppercase Latin letters (A-Z)", currency)
 	}
 
+	logDir := envString(dotEnv, "LOG_DIR", defaultLogDir)
+	logRetentionDays, err := envNonNegativeInt(dotEnv, "LOG_RETENTION_DAYS", defaultLogRetentionDays)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		Port:               port,
-		DBPath:             envString(dotEnv, "DB_PATH", defaultDBPath),
-		DBBusyTimeoutMs:    dbBusyMs,
+		DatabaseURL:        databaseURL,
+		DBMaxConns:         int32(dbMaxConns),
+		DBConnectTimeout:   time.Duration(dbConnectTimeoutSec) * time.Second,
 		HTTPTimeout:        time.Duration(httpTimeoutSec) * time.Second,
 		MaxJSONBodyBytes:   maxJSONBytes,
 		JWTSecret:          jwtSecret,
@@ -164,6 +186,8 @@ func LoadConfig(envFilePath string) (*Config, error) {
 		DefaultTimezone:    tzName,
 		DefaultLocation:    loc,
 		DefaultCurrency:    currency,
+		LogDir:             logDir,
+		LogRetentionDays:   logRetentionDays,
 	}, nil
 }
 
@@ -303,6 +327,21 @@ func envIntRange(dotEnv map[string]string, key string, fallback, minVal, maxVal 
 	}
 	if val < minVal || val > maxVal {
 		return 0, fmt.Errorf("invalid %s=%d: must be between %d and %d", key, val, minVal, maxVal)
+	}
+	return val, nil
+}
+
+func envNonNegativeInt(dotEnv map[string]string, key string, fallback int) (int, error) {
+	raw := lookupConfigValue(dotEnv, key)
+	if raw == "" {
+		return fallback, nil
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s=%q: must be an integer: %w", key, raw, err)
+	}
+	if val < 0 {
+		return 0, fmt.Errorf("invalid %s=%d: must be greater than or equal to 0", key, val)
 	}
 	return val, nil
 }

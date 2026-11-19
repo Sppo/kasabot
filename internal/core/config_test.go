@@ -19,7 +19,9 @@ func TestLoadConfigDefaultsAndEnvFile(t *testing.T) {
 	envContent := strings.Join([]string{
 		"# Тестовий .env файл з коментарями, export та лапками",
 		"PORT=9090 # inline коментар після числа",
-		"export DB_PATH=\"test_data.db\" # коментар після лапок",
+		"export DATABASE_URL=\"postgres://kasabot:pass@127.0.0.1:5432/kasabot?sslmode=disable\" # коментар після лапок",
+		"DB_MAX_CONNS=15",
+		"DB_CONNECT_TIMEOUT_SEC=8",
 		"JWT_SECRET='super-secret-jwt-key-12345#with-hash'",
 		"TRIAL_DAYS=7",
 		"DEFAULT_TIMEZONE=Europe/Kyiv",
@@ -31,7 +33,7 @@ func TestLoadConfigDefaultsAndEnvFile(t *testing.T) {
 	}
 
 	// Порожні змінні в shell не повинні блокувати значення з .env файлу
-	keys := []string{"PORT", "DB_PATH", "JWT_SECRET", "TRIAL_DAYS", "DEFAULT_TIMEZONE", "DEFAULT_CURRENCY"}
+	keys := []string{"PORT", "DATABASE_URL", "DB_MAX_CONNS", "DB_CONNECT_TIMEOUT_SEC", "JWT_SECRET", "TRIAL_DAYS", "DEFAULT_TIMEZONE", "DEFAULT_CURRENCY"}
 	for _, k := range keys {
 		t.Setenv(k, "")
 	}
@@ -42,15 +44,21 @@ func TestLoadConfigDefaultsAndEnvFile(t *testing.T) {
 	}
 
 	// Перевіряємо, що LoadConfig не забруднив глобальний os.Getenv
-	if got := os.Getenv("DB_PATH"); got != "" {
-		t.Errorf("expected LoadConfig not to mutate global os.Getenv, got DB_PATH=%q", got)
+	if got := os.Getenv("DATABASE_URL"); got != "" {
+		t.Errorf("expected LoadConfig not to mutate global os.Getenv, got DATABASE_URL=%q", got)
 	}
 
 	if cfg.Port != 9090 {
 		t.Errorf("expected Port=9090, got %d", cfg.Port)
 	}
-	if cfg.DBPath != "test_data.db" {
-		t.Errorf("expected DBPath=test_data.db, got %q", cfg.DBPath)
+	if cfg.DatabaseURL != "postgres://kasabot:pass@127.0.0.1:5432/kasabot?sslmode=disable" {
+		t.Errorf("expected DatabaseURL from .env, got %q", cfg.DatabaseURL)
+	}
+	if cfg.DBMaxConns != 15 {
+		t.Errorf("expected DBMaxConns=15, got %d", cfg.DBMaxConns)
+	}
+	if cfg.DBConnectTimeout != 8*time.Second {
+		t.Errorf("expected DBConnectTimeout=8s, got %v", cfg.DBConnectTimeout)
 	}
 	if cfg.JWTSecret != "super-secret-jwt-key-12345#with-hash" {
 		t.Errorf("expected JWTSecret with inner hash preserved, got %q", cfg.JWTSecret)
@@ -73,7 +81,18 @@ func TestLoadConfigDefaultsAndEnvFile(t *testing.T) {
 }
 
 func TestLoadConfigValidationErrors(t *testing.T) {
+	const testDBURL = "postgres://kasabot:kasabot@127.0.0.1:5432/kasabot?sslmode=disable"
+
+	t.Run("missing database url fails", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", "")
+		t.Setenv("JWT_SECRET", "valid-secret-at-least-16-chars")
+		if _, err := LoadConfig(""); err == nil {
+			t.Fatal("expected error when DATABASE_URL is not set, got nil")
+		}
+	})
+
 	t.Run("missing jwt secret fails", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", testDBURL)
 		t.Setenv("JWT_SECRET", "")
 		if _, err := LoadConfig(""); err == nil {
 			t.Fatal("expected error when JWT_SECRET is not set, got nil")
@@ -81,6 +100,7 @@ func TestLoadConfigValidationErrors(t *testing.T) {
 	})
 
 	t.Run("placeholder jwt secret fails", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", testDBURL)
 		t.Setenv("JWT_SECRET", "change-me-in-production-min-16-chars")
 		if _, err := LoadConfig(""); err == nil {
 			t.Fatal("expected error for placeholder JWT_SECRET, got nil")
@@ -88,6 +108,7 @@ func TestLoadConfigValidationErrors(t *testing.T) {
 	})
 
 	t.Run("short jwt secret fails", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", testDBURL)
 		t.Setenv("JWT_SECRET", "too-short")
 		if _, err := LoadConfig(""); err == nil {
 			t.Fatal("expected error for short JWT_SECRET, got nil")
@@ -95,6 +116,7 @@ func TestLoadConfigValidationErrors(t *testing.T) {
 	})
 
 	t.Run("invalid timezone fails", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", testDBURL)
 		t.Setenv("JWT_SECRET", "valid-secret-at-least-16-chars")
 		t.Setenv("DEFAULT_TIMEZONE", "Invalid/Zone_Name")
 		if _, err := LoadConfig(""); err == nil {
@@ -103,6 +125,7 @@ func TestLoadConfigValidationErrors(t *testing.T) {
 	})
 
 	t.Run("numeric currency code fails", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", testDBURL)
 		t.Setenv("JWT_SECRET", "valid-secret-at-least-16-chars")
 		t.Setenv("DEFAULT_TIMEZONE", "Europe/Kyiv")
 		t.Setenv("DEFAULT_CURRENCY", "123")
@@ -117,6 +140,7 @@ func TestLoadConfigValidationErrors(t *testing.T) {
 		if err := os.WriteFile(envFile, []byte("JWT_SECRET=\"unclosed-secret-1234567890\n"), 0600); err != nil {
 			t.Fatalf("write env file: %v", err)
 		}
+		t.Setenv("DATABASE_URL", testDBURL)
 		t.Setenv("JWT_SECRET", "")
 		if _, err := LoadConfig(envFile); err == nil {
 			t.Fatal("expected error for unbalanced quotes in .env, got nil")
@@ -124,6 +148,7 @@ func TestLoadConfigValidationErrors(t *testing.T) {
 	})
 
 	t.Run("non-numeric port distinguishes parse error", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", testDBURL)
 		t.Setenv("JWT_SECRET", "valid-secret-at-least-16-chars")
 		t.Setenv("PORT", "abc")
 		_, err := LoadConfig("")
@@ -133,11 +158,22 @@ func TestLoadConfigValidationErrors(t *testing.T) {
 	})
 
 	t.Run("out-of-range port distinguishes range error", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", testDBURL)
 		t.Setenv("JWT_SECRET", "valid-secret-at-least-16-chars")
 		t.Setenv("PORT", "70000")
 		_, err := LoadConfig("")
 		if err == nil || !strings.Contains(err.Error(), "must be between 1 and 65535") {
 			t.Fatalf("expected range error, got: %v", err)
+		}
+	})
+
+	t.Run("negative log retention days fails", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", testDBURL)
+		t.Setenv("JWT_SECRET", "valid-secret-at-least-16-chars")
+		t.Setenv("LOG_RETENTION_DAYS", "-1")
+		_, err := LoadConfig("")
+		if err == nil || !strings.Contains(err.Error(), "greater than or equal to 0") {
+			t.Fatalf("expected >= 0 error for LOG_RETENTION_DAYS=-1, got: %v", err)
 		}
 	})
 }

@@ -14,6 +14,9 @@ web/.env.local
 *.db-wal
 *.db-shm
 
+# Logs
+logs/
+
 # Go Build Artifacts
 kasabot
 bin/

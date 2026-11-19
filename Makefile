@@ -1,4 +1,4 @@
-.PHONY: check test build dev tunnel
+.PHONY: check test build dev tunnel db-up db-down
 
 PORT ?= 8080
 
@@ -31,3 +31,11 @@ tunnel:
 		if [ -n "$$ENV_P" ]; then PORT_VAL="$$ENV_P"; fi; \
 	fi; \
 	cloudflared tunnel --url "http://localhost:$$PORT_VAL"
+
+# Запуск локального PostgreSQL у Docker (працює на 127.0.0.1)
+db-up:
+	docker compose up -d
+
+# Зупинка локального PostgreSQL у Docker (дані зберігаються в іменованому томі)
+db-down:
+	docker compose down

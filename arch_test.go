@@ -262,6 +262,7 @@ func checkGoArchitecture(rootDir string) []string {
 func isSQLPackage(impPath string) bool {
 	return impPath == "database/sql" ||
 		strings.HasPrefix(impPath, "database/sql/") ||
+		strings.HasPrefix(impPath, "github.com/jackc/pgx") ||
 		strings.Contains(impPath, "modernc.org/sqlite")
 }
 
@@ -697,6 +698,18 @@ func TestArchitectureValidatorCatchesViolations(t *testing.T) {
 				relFile:     "internal/modules/finance/service_helper.go",
 				code:        `package finance; import _ "net/http/httputil"`,
 				expectToken: "[LAYER-SERVICE]",
+			},
+			{
+				name:        "service.go imports pgxpool",
+				relFile:     "internal/modules/finance/service.go",
+				code:        `package finance; import _ "github.com/jackc/pgx/v5/pgxpool"`,
+				expectToken: "[LAYER-SERVICE]",
+			},
+			{
+				name:        "handler imports pgx",
+				relFile:     "internal/modules/finance/http_handler.go",
+				code:        `package finance; import _ "github.com/jackc/pgx/v5"`,
+				expectToken: "[LAYER-HANDLER]",
 			},
 			{
 				name:        "handler references Repository in same package without import",

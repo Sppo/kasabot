@@ -10,8 +10,8 @@
 
 ## Поточна активна задача (Active Task)
 
-- **Статус:** `Немає активної задачі (очікує старту Плану #002)`
-- **Файл плану:** — *(наступний: `plans/002-be-core-db-and-migrations.md`)*
+- **Статус:** `Немає активної задачі (очікує старту Плану #003)`
+- **Файл плану:** — *(наступний: `plans/003-be-core-auth-and-workspaces.md`)*
 - **Короткий опис:** —
 
 ---
@@ -23,6 +23,9 @@
 | 000 | Проєктування архітектури, специфікації та правил агентів | `docs` / `rules` | [000-architecture-and-specs.md](./plans/archive/000-architecture-and-specs.md) | Закрито |
 | 001 | Каркас Go, Конфіг `.env`, `errors.go`, `httputil.go` та `arch_test.go` | `BE-Core` | [001-be-core-config-and-arch-test.md](./plans/archive/001-be-core-config-and-arch-test.md) | Закрито |
 | 001a | Виправлення за код-ревю (`Makefile`, `arch_test.go`, `config.go`) | `BE-Core` | [001a-fix-makefile-and-arch-test-review.md](./plans/archive/001a-fix-makefile-and-arch-test-review.md) | Закрито |
+| 002a | Правила та документація: перехід на PostgreSQL і нове правило залежностей | `docs` / `rules` | [002a-rules-postgres-and-dependencies.md](./plans/archive/002a-rules-postgres-and-dependencies.md) | Закрито |
+| 003a | Логування у файли по днях, окремий файл помилок та `error_id` | `BE-Core` | [003a-be-core-logging.md](./plans/archive/003a-be-core-logging.md) | Закрито |
+| 002 | PostgreSQL (`pgx`), Раннер Міграцій та Інтерфейс Модуля | `BE-Core` | [002-be-core-db-and-migrations.md](./plans/archive/002-be-core-db-and-migrations.md) | Закрито |
 
 ---
 
@@ -45,14 +48,17 @@
   - Full-Stack автотест `arch_test.go` (перевірка імпортів модулів, відсутності SQL у сервісах/хендлерах, заборони `os.Getenv` / `import.meta.env` поза конфігами, заборони прямого `fetch` у React-компонентах).
 - **Перевірка:** `go test ./...` проходить успішно.
 
-#### [ ] План `#002` (`[BE-Core]`): База даних SQLite (`WAL`), Раннер Міграцій та Інтерфейс Модуля
-- **Файли:** `internal/core/module.go`, `internal/core/database.go`, `internal/core/database_test.go`.
+#### [x] План `#002a` (`[docs]`): Правила та документація: перехід на PostgreSQL і нове правило залежностей
+- **Файли:** `AGENTS.md`, `ARCHITECTURE_RULES.md`, `SPEC.md`, `PLAN.md`. Коду не змінює. План: [002a-rules-postgres-and-dependencies.md](./plans/archive/002a-rules-postgres-and-dependencies.md).
+
+#### [x] План `#002` (`[BE-Core]`): PostgreSQL (`pgx`), Раннер Міграцій та Інтерфейс Модуля
+- **Файли:** `go.mod`, `docker-compose.yml`, `Makefile`, `internal/core/module.go`, `internal/core/database.go`, `internal/core/database_test.go`, `internal/core/config.go`, `.env.example`, `arch_test.go`. План: [002-be-core-db-and-migrations.md](./plans/archive/002-be-core-db-and-migrations.md).
 - **Зміст:**
-  - Підключення `modernc.org/sqlite` з `WAL`, `busy_timeout`, `foreign_keys=ON` та `SetMaxOpenConns(1)`.
-  - Таблиця `schema_migrations` (накатування міграцій модулів тільки вперед у транзакції).
+  - Підключення PostgreSQL через `pgx/v5` (`pgxpool`), локально в Docker (`make db-up`).
+  - Таблиця `schema_migrations` (міграції модулів тільки вперед у транзакції, `pg_advisory_lock`).
   - Системні таблиці ядра: `users`, `workspaces`, `workspace_members`, `workspace_invites`, `telegram_link_tokens`.
   - Контракт `core.Module` та реєстр модулів.
-- **Перевірка:** unit-тести створення БД, системних таблиць та ідемпотентності міграцій (`go test ./internal/core/...`).
+- **Перевірка:** інтеграційні тести на реальному Postgres (системні таблиці, ідемпотентність міграцій, відкат, паралельний запуск; `make check`).
 
 #### [ ] План `#003` (`[BE-Core]`): Авторизація (JWT), Workspaces (Інвайти) та Квоти Підписки/AI
 - **Файли:** `internal/core/auth.go`, `internal/core/workspace.go`, `internal/core/auth_test.go`.
@@ -62,6 +68,14 @@
   - Інвайт-коди для приєднання партнера/дружини до воркспейсу та одноразові токени прив'язки Telegram.
   - Перевірка активності підписки (`402 Payment Required` для Read-Only режиму) та денних квот AI (`429 Too Many Requests` зі списанням квоти лише після успішної відповіді AI).
 - **Перевірка:** unit-тести реєстрації, логіну, інвайтів, ролей та блокування `402` / `429`.
+
+#### [x] План `#003a` (`[BE-Core]`): Логування у файли по днях, окремий файл помилок та `error_id` ([архів](./plans/archive/003a-be-core-logging.md))
+- **Файли:** `internal/core/logger.go`, `internal/core/logger_test.go`, `internal/core/config.go`, `internal/core/config_test.go`, `.env.example`.
+- **Зміст:**
+  - `slog` (JSON) у `logs/app-<день>.log`, помилки додатково в `logs/errors-<день>.log`, ротація за `LOG_RETENTION_DAYS`.
+  - Короткий `error_id` та `request_id` для пошуку повних логів за скороченим повідомленням; HTTP-middleware.
+  - Хук для Telegram-сповіщень (саме сповіщення робляться в Плані `#004`).
+- **Перевірка:** unit-тести запису по днях, видалення старих файлів та відсутності секретів у логах (`make check`).
 
 #### [ ] План `#004` (`[BE-Core]`): Універсальний Клієнт Gemini AI, Опціональний Telegram-ядро та Контейнер `app.go`
 - **Файли:** `internal/core/ai.go`, `internal/core/bot.go`, `internal/core/app.go`, `internal/core/ai_test.go`.
@@ -76,8 +90,8 @@
 - **Зміст:**
   - Міграції таблиць `fin_categories` та `fin_transactions` (суми в копійках `amount_minor`, поле `idempotency_key`).
   - Сід базових системних категорій витрат і доходів для нового воркспейсу.
-  - Інтерфейс `Repository` та SQLite-реалізація (параметризовані SQL-запити з обов'язковим `WHERE workspace_id = ?`, дедуплікація за `idempotency_key`, агрегація `summary` та розбивка по категоріях за `day` / `week` / `month`).
-- **Перевірка:** інтеграційні тести репозиторію на in-memory SQLite (`go test ./internal/modules/finance/...`).
+  - Інтерфейс `Repository` та PostgreSQL-реалізація на `pgx` (параметризовані SQL-запити з обов'язковим `WHERE workspace_id = $n`, дедуплікація за `idempotency_key`, агрегація `summary` та розбивка по категоріях за `day` / `week` / `month`).
+- **Перевірка:** інтеграційні тести репозиторію на реальному локальному PostgreSQL у тимчасовій схемі (`make db-up`, `go test ./internal/modules/finance/...`).
 
 #### [ ] План `#006` (`[BE-Finance]`): Модуль Фінансів — Шар 2 (`service.go`) + Шар 1 (`http_handler.go`, `bot_handler.go`) + `cmd/app/main.go`
 - **Файли:** `internal/modules/finance/service.go`, `internal/modules/finance/service_test.go`, `internal/modules/finance/http_handler.go`, `internal/modules/finance/bot_handler.go`, `internal/modules/finance/module.go`, `cmd/app/main.go`.
@@ -139,7 +153,7 @@
 #### [ ] План `#012` (`[Full-Stack]`): Вбудовування `//go:embed`, Скрипт HTTPS-тунелю та Фінальний E2E-аудит
 - **Файли:** `internal/core/static.go`, оновлення `cmd/app/main.go` та `Makefile`.
 - **Зміст:**
-  - Вбудовування зібраного `web/dist` у єдиний Go-бінарник із підтримкою SPA-роутингу та PWA service worker.
+  - Вбудовування зібраного `web/dist` у єдиний Go-бінарник із підтримкою SPA-роутингу та PWA service worker (PostgreSQL лишається окремим сервісом, бінарник підключається через `DATABASE_URL`).
   - Команда `make tunnel` для запуску захищеного HTTPS-тунелю для тестування мікрофона та спільного простору з двох iPhone.
   - Фінальний прогін `make check` (`arch_test.go`, unit-тести, `npm run build`).
-- **Перевірка:** запуск єдиного бінарника та живий тест спільного бюджету з двох смартфонів.
+- **Перевірка:** запуск єдиного бінарника (з локальним PostgreSQL) та живий тест спільного бюджету з двох смартфонів.

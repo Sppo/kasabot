@@ -20,7 +20,8 @@
 - **Мова:** Go (останній стабільний)
 - **HTTP-роутер:** `github.com/go-chi/chi/v5` + `go-chi/cors`
 - **Авторизація:** Email + Password (`golang.org/x/crypto/bcrypt`) + JWT (`github.com/golang-jwt/jwt/v5`)
-- **База даних:** SQLite без CGO (`modernc.org/sqlite`), файл `data.db` у режимі `WAL` (`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;`)
+- **База даних:** PostgreSQL (окремий сервіс; локально через Docker Compose, `make db-up`), драйвер та пул з'єднань `github.com/jackc/pgx/v5` (`pgxpool`), параметризовані запити (`$1, $2, ...`), підключення лише через `DATABASE_URL` з `.env`. ORM не використовується, щоб фільтр `workspace_id` лишався видимим у SQL.
+- **Додаткова інфраструктура (за потреби):** Redis та подібні сервіси дозволені за правилом залежностей з `AGENTS.md` (розділ 2, п. 5): лише якщо вирішують реальну задачу затвердженого плану і не ламають інваріанти. Підключений сервіс записується в цей розділ.
 - **AI Core:** Google Gemini API (`gemini-2.5-flash`, конфігурується через `.env`) — розпізнавання тексту та аудіо (`.ogg`, `.webm`, `.mp4`, `.m4a`) у суворий JSON за заданою JSON Schema.
 - **Telegram Bot (опціонально):** `gopkg.in/telebot.v3`
 
@@ -29,7 +30,8 @@
 - **Мобільна нативна оболонка:** `@capacitor/core`, `@capacitor/cli`, `@capacitor/ios`, `@capacitor/android`, `@capacitor/haptics` (тактильна вібрація при старті/зупинці запису та збереженні)
 - **Стилі та Mobile UI:** Tailwind CSS + Lucide Icons (Mobile-first layout з нижнім таб-баром під великий палець та підтримкою `env(safe-area-inset-*)`)
 - **Офлайн-черга та PWA:** `IndexedDB` (локальне збереження аудіо-блобів та тексту при відсутності мережі з фоновою синхронізацією) + `vite-plugin-pwa`
-- **Інтеграція з Go:** В продакшн-режимі папка `web/dist` вбудовується в Go-бінарник через `//go:embed`.
+- **Запити, кеш і маршрутизація:** TanStack Query (запити до API та кеш) і React Router. Redux не використовується.
+- **Інтеграція з Go:** В продакшн-режимі папка `web/dist` вбудовується в Go-бінарник через `//go:embed` (база даних PostgreSQL лишається окремим сервісом).
 
 ---
 
@@ -42,10 +44,10 @@ kasabot/
 ├── internal/
 │   ├── core/
 │   │   ├── app.go                  # Контейнер залежностей (DB, AI, Config, Auth, Registry)
-│   │   ├── config.go               # Єдина точка зчитування .env (PORT, DB_PATH, JWT_SECRET, GEMINI_API_KEY тощо)
+│   │   ├── config.go               # Єдина точка зчитування .env (PORT, DATABASE_URL, JWT_SECRET, GEMINI_API_KEY тощо)
 │   │   ├── errors.go               # Єдиний реєстр констант машиночитаних кодів помилок (ERR_*) для i18n
 │   │   ├── httputil.go             # Спільні DRY-хелпери: WriteJSON, WriteError, DecodeJSON, контекст (UserID, WorkspaceID)
-│   │   ├── database.go             # Підключення до SQLite, PRAGMA, базові таблиці ядра та раннер міграцій
+│   │   ├── database.go             # Підключення до PostgreSQL (pgxpool), базові таблиці ядра та раннер міграцій
 │   │   ├── auth.go                 # Реєстрація/логін (Email+Password), JWT middleware, коди прив'язки Telegram
 │   │   ├── workspace.go            # CRUD воркспейсів, інвайти партнерів, перемикання активного workspace
 │   │   ├── ai.go                   # Універсальний клієнт Gemini API (текст + аудіо -> суворий JSON Schema)
@@ -87,6 +89,7 @@ kasabot/
 ├── SPEC.md
 ├── GUIDE.md
 ├── .env.example
+├── docker-compose.yml              # Локальний PostgreSQL для розробки (make db-up / make db-down)
 ├── .gitignore
 └── go.mod
 ```
@@ -97,45 +100,45 @@ kasabot/
 
 ### 4.1. Системні таблиці БД (Core Schema)
 1. **`users`**
-   - `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
+   - `id` (BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY)
    - `email` (TEXT UNIQUE NOT NULL)
    - `password_hash` (TEXT NOT NULL)
    - `name` (TEXT NOT NULL)
-   - `telegram_id` (INTEGER UNIQUE NULL) — заповнюється лише після прив'язки в налаштуваннях
-   - `active_workspace_id` (INTEGER NULL) — поточний обраний воркспейс
-   - `created_at` (DATETIME)
+   - `telegram_id` (BIGINT UNIQUE NULL) — заповнюється лише після прив'язки в налаштуваннях
+   - `active_workspace_id` (BIGINT NULL) — поточний обраний воркспейс
+   - `created_at` (TIMESTAMPTZ)
 
 2. **`workspaces`**
-   - `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
+   - `id` (BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY)
    - `name` (TEXT NOT NULL) — наприклад, «Мій ФОП» або «Сімейний бюджет»
    - `currency` (TEXT NOT NULL DEFAULT 'UAH')
-   - `owner_id` (INTEGER NOT NULL REFERENCES users(id))
+   - `owner_id` (BIGINT NOT NULL REFERENCES users(id))
    - `plan_status` (TEXT NOT NULL DEFAULT 'trial') — `'trial'` | `'active'` | `'expired'`
-   - `subscription_ends_at` (DATETIME NOT NULL) — при створенні автоматично `+14 днів` (безкоштовний тріал)
+   - `subscription_ends_at` (TIMESTAMPTZ NOT NULL) — при створенні автоматично `+14 днів` (безкоштовний тріал)
    - `ai_requests_today` (INTEGER NOT NULL DEFAULT 0) — лічильник викликів AI за поточну добу
    - `ai_requests_date` (DATE NOT NULL DEFAULT CURRENT_DATE) — дата для авто-скидання денного лічильника
-   - `created_at` (DATETIME)
+   - `created_at` (TIMESTAMPTZ)
 
 3. **`workspace_members`**
-   - `workspace_id` (INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE)
-   - `user_id` (INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE)
+   - `workspace_id` (BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE)
+   - `user_id` (BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE)
    - `role` (TEXT NOT NULL DEFAULT 'member') — `'owner'` | `'member'`
    - `PRIMARY KEY (workspace_id, user_id)`
 
 4. **`workspace_invites`** (для спільного доступу до воркспейсу)
    - `code` (TEXT PRIMARY KEY)
-   - `workspace_id` (INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE)
-   - `expires_at` (DATETIME NOT NULL)
+   - `workspace_id` (BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE)
+   - `expires_at` (TIMESTAMPTZ NOT NULL)
 
 5. **`telegram_link_tokens`** (одноразові коди прив'язки Telegram з додатку)
    - `token` (TEXT PRIMARY KEY)
-   - `user_id` (INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE)
-   - `expires_at` (DATETIME NOT NULL)
+   - `user_id` (BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE)
+   - `expires_at` (TIMESTAMPTZ NOT NULL)
 
 6. **`schema_migrations`** (облік застосованих міграцій модулів, тільки вперед)
    - `module` (TEXT NOT NULL)
    - `version` (INTEGER NOT NULL)
-   - `applied_at` (DATETIME NOT NULL)
+   - `applied_at` (TIMESTAMPTZ NOT NULL)
    - `PRIMARY KEY (module, version)`
 
 ### 4.2. Авторизація та робота з Workspaces
@@ -192,7 +195,7 @@ type Module interface {
   - У React-компонентах (`.tsx`) **заборонено** писати живий текст напряму — використовується тільки хук `const { t, locale, setLocale } = useI18n()`.
 - **Помилки API та Системні категорії:**
   - Бекенд повертає помилки зі стабільним кодом `{"error_code": "ERR_...", "message": "..."}`, який фронтенд перекладає через `t('errors.' + error_code)`.
-  - Системні категорії (`fin_categories` з `is_system = 1`) мають фіксовані ключі перекладу на фронтенді (`t('finance.categories.' + name)`), завдяки чому при перемиканні мови `UA <-> EN` весь інтерфейс і системні категорії миттєво змінюють мову.
+  - Системні категорії (`fin_categories` з `is_system = TRUE`) мають фіксовані ключі перекладу на фронтенді (`t('finance.categories.' + name)`), завдяки чому при перемиканні мови `UA <-> EN` весь інтерфейс і системні категорії миттєво змінюють мову.
 
 ---
 
@@ -200,11 +203,11 @@ type Module interface {
 
 ### 5.1. Таблиці БД модуля `finance`
 1. **`fin_categories`** (фіксований довідник категорій на воркспейс)
-   - `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
-   - `workspace_id` (INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE)
+   - `id` (BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY)
+   - `workspace_id` (BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE)
    - `name` (TEXT NOT NULL)
    - `type` (TEXT NOT NULL) — `'expense'` | `'income'`
-   - `is_system` (BOOLEAN NOT NULL DEFAULT 1)
+   - `is_system` (BOOLEAN NOT NULL DEFAULT TRUE)
    - `UNIQUE(workspace_id, name, type)`
 
    *Базовий сід при створенні воркспейсу (`OnWorkspaceCreated`):*
@@ -212,11 +215,11 @@ type Module interface {
    - **Доходи (`income`):** `Продажі`, `Оплата послуг`, `Повернення`, `Інший дохід`.
 
 2. **`fin_transactions`**
-   - `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
-   - `workspace_id` (INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE)
-   - `user_id` (INTEGER NOT NULL REFERENCES users(id))
+   - `id` (BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY)
+   - `workspace_id` (BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE)
+   - `user_id` (BIGINT NOT NULL REFERENCES users(id))
    - `type` (TEXT NOT NULL) — `'expense'` | `'income'`
-   - `amount_minor` (INTEGER NOT NULL) — сума в копійках (`165.50 грн` = `16550`), завжди `> 0`
+   - `amount_minor` (BIGINT NOT NULL) — сума в копійках (`165.50 грн` = `16550`), завжди `> 0`
    - `currency` (TEXT NOT NULL DEFAULT 'UAH')
    - `category` (TEXT NOT NULL) — значення з `fin_categories.name`
    - `note` (TEXT NOT NULL DEFAULT '') — короткий опис (*«Заправка WOG»*, *«Оплата від Івана»*)
@@ -225,7 +228,7 @@ type Module interface {
    - `idempotency_key` (TEXT NULL) — ключ дедуплікації (UUIDv4) з клієнтської `OfflineQueue` для захисту від повторного збереження при обриві зв'язку
    - `raw_input` (TEXT NOT NULL DEFAULT '') — оригінальний текст або транскрипт голосу
    - `occurred_at` (DATE NOT NULL) — дата операції (`YYYY-MM-DD`)
-   - `created_at` (DATETIME NOT NULL)
+   - `created_at` (TIMESTAMPTZ NOT NULL)
 
 ### 5.2. Мобільний UX («Однією рукою»), Офлайн-черга та AI-парсинг
 1. **Екран «Пульт» (Головний екран на телефоні):**

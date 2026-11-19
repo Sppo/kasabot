@@ -14,11 +14,13 @@ type ctxKey int
 const (
 	ctxKeyUserID ctxKey = iota + 1
 	ctxKeyWorkspaceID
+	ctxKeyRequestID
 )
 
 // ErrorResponse — єдиний формат помилки REST API для двомовного перекладу на фронтенді.
 type ErrorResponse struct {
 	ErrorCode ErrorCode `json:"error_code"`
+	ErrorID   string    `json:"error_id,omitempty"`
 	Message   string    `json:"message"`
 }
 
@@ -31,8 +33,14 @@ func WriteJSON(w http.ResponseWriter, status int, payload any) {
 
 // WriteError повертає стандартизовану JSON-помилку з машиночитаним кодом ErrorCode.
 func WriteError(w http.ResponseWriter, status int, code ErrorCode, message string) {
+	WriteErrorWithID(w, status, code, message, "")
+}
+
+// WriteErrorWithID повертає JSON-помилку з кодом ErrorCode та ідентифікатором error_id для пошуку в логах.
+func WriteErrorWithID(w http.ResponseWriter, status int, code ErrorCode, message, errorID string) {
 	WriteJSON(w, status, ErrorResponse{
 		ErrorCode: code,
+		ErrorID:   errorID,
 		Message:   message,
 	})
 }
@@ -82,4 +90,15 @@ func WithWorkspaceID(ctx context.Context, workspaceID int64) context.Context {
 func WorkspaceIDFromCtx(ctx context.Context) (int64, bool) {
 	id, ok := ctx.Value(ctxKeyWorkspaceID).(int64)
 	return id, ok && id > 0
+}
+
+// WithRequestID зберігає ID HTTP-запиту в context.Context.
+func WithRequestID(ctx context.Context, requestID string) context.Context {
+	return context.WithValue(ctx, ctxKeyRequestID, requestID)
+}
+
+// RequestIDFromCtx повертає ID HTTP-запиту з контексту.
+func RequestIDFromCtx(ctx context.Context) string {
+	id, _ := ctx.Value(ctxKeyRequestID).(string)
+	return id
 }
