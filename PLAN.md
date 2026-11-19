@@ -1,0 +1,143 @@
+# PLAN.md — Дорожня карта та Управління планами KasaBot
+
+> **Правило для AI-агента (згідно з [AGENTS.md](./AGENTS.md) та [ARCHITECTURE_RULES.md](./ARCHITECTURE_RULES.md)):**
+> 1. Кожен план виконується окремо для Бекенду (`[BE-*]`) або Фронтенду (`[FE-*]`), з мінімальним diff (2–5 файлів за раз) і повним покриттям тестами.
+> 2. Перед стартом чергового плану створи файл `plans/<NNN>-<short-name>.md` за шаблоном [plans/TEMPLATE.md](./plans/TEMPLATE.md), запиши його в блок **«Поточна активна задача»** нижче і **запитай дозволу у користувача**.
+> 3. Після виконання коду та `make check` відміть чекбокси в `plans/<NNN>-<short-name>.md` і чекай перевірки користувачем.
+> 4. Тільки після команди користувача **«перенеси план в архівні»** — перемісти файл у `plans/archive/<NNN>-<short-name>.md`, додай його в таблицю архіву і відміть `[x]` у дорожній карті нижче.
+
+---
+
+## Поточна активна задача (Active Task)
+
+- **Статус:** `Чернетка — очікує підтвердження`
+- **Файл плану:** [001-be-core-config-and-arch-test.md](./plans/001-be-core-config-and-arch-test.md)
+- **Короткий опис:** `[BE-Core]` Ініціалізація `go.mod`, `.env.example`, `Makefile`, єдиного конфігу `internal/core/config.go`, реєстру помилок `internal/core/errors.go`, DRY-хелперів `internal/core/httputil.go` та Full-Stack автотесту архітектури `arch_test.go`.
+
+---
+
+## Архів виконаних планів (`plans/archive/`)
+
+| № | Назва задачі | Модуль / Область | Файл в архіві | Статус |
+|---|--------------|------------------|---------------|--------|
+| 000 | Проєктування архітектури, специфікації та правил агентів | `docs` / `rules` | [000-architecture-and-specs.md](./plans/archive/000-architecture-and-specs.md) | Закрито |
+
+---
+
+## Детальна дорожня карта проєкту (12 ізольованих планів: Backend окремо, Frontend окремо)
+
+### Етап 0. Проєктування та правила (Завершено)
+- [x] Продуктовий опис та стратегія монетизації ([GUIDE.md](./GUIDE.md))
+- [x] Технічна специфікація Mobile-First Modular Monolith ([SPEC.md](./SPEC.md))
+- [x] Жорсткі архітектурні межі та правила агентів ([ARCHITECTURE_RULES.md](./ARCHITECTURE_RULES.md), [AGENTS.md](./AGENTS.md))
+
+---
+
+### Частина А: Бекенд — Ядро (`internal/core`) та Модуль Фінансів (`internal/modules/finance`)
+
+#### [ ] План `#001` (`[BE-Core]`): Каркас Go, Конфіг `.env` та Автотест Архітектури (`arch_test.go`)
+- **Файли:** `go.mod`, `.env.example`, `Makefile`, `arch_test.go`, `internal/core/config.go`, `internal/core/errors.go`, `internal/core/httputil.go`, `internal/core/config_test.go`.
+- **Зміст:**
+  - Єдина точка зчитування `.env` (`config.go`) та коментований `.env.example`.
+  - Єдиний реєстр кодів помилок (`errors.go`) та спільні DRY-хелпери (`httputil.go`: `WriteJSON`, `WriteError`, `DecodeJSON`, контекст).
+  - Full-Stack автотест `arch_test.go` (перевірка імпортів модулів, відсутності SQL у сервісах/хендлерах, заборони `os.Getenv` / `import.meta.env` поза конфігами, заборони прямого `fetch` у React-компонентах).
+- **Перевірка:** `go test ./...` проходить успішно.
+
+#### [ ] План `#002` (`[BE-Core]`): База даних SQLite (`WAL`), Раннер Міграцій та Інтерфейс Модуля
+- **Файли:** `internal/core/module.go`, `internal/core/database.go`, `internal/core/database_test.go`.
+- **Зміст:**
+  - Підключення `modernc.org/sqlite` з `WAL`, `busy_timeout`, `foreign_keys=ON` та `SetMaxOpenConns(1)`.
+  - Таблиця `schema_migrations` (накатування міграцій модулів тільки вперед у транзакції).
+  - Системні таблиці ядра: `users`, `workspaces`, `workspace_members`, `workspace_invites`, `telegram_link_tokens`.
+  - Контракт `core.Module` та реєстр модулів.
+- **Перевірка:** unit-тести створення БД, системних таблиць та ідемпотентності міграцій (`go test ./internal/core/...`).
+
+#### [ ] План `#003` (`[BE-Core]`): Авторизація (JWT), Workspaces (Інвайти) та Квоти Підписки/AI
+- **Файли:** `internal/core/auth.go`, `internal/core/workspace.go`, `internal/core/auth_test.go`.
+- **Зміст:**
+  - Реєстрація та логін (`bcrypt` + `JWT`), авто-створення дефолтного воркспейсу з 14-денним `trial` та викликом `OnWorkspaceCreated`.
+  - Middleware авторизації та перевірки членства/ролі (`owner` | `member`) у `workspace_members`.
+  - Інвайт-коди для приєднання партнера/дружини до воркспейсу та одноразові токени прив'язки Telegram.
+  - Перевірка активності підписки (`402 Payment Required` для Read-Only режиму) та денних квот AI (`429 Too Many Requests` зі списанням квоти лише після успішної відповіді AI).
+- **Перевірка:** unit-тести реєстрації, логіну, інвайтів, ролей та блокування `402` / `429`.
+
+#### [ ] План `#004` (`[BE-Core]`): Універсальний Клієнт Gemini AI, Опціональний Telegram-ядро та Контейнер `app.go`
+- **Файли:** `internal/core/ai.go`, `internal/core/bot.go`, `internal/core/app.go`, `internal/core/ai_test.go`.
+- **Зміст:**
+  - Клієнт Gemini API (`ai.go`): прийом тексту або аудіо, перевірка `MAX_AUDIO_SIZE_BYTES` та білого списку MIME-типів, захист від prompt injection (окремий `user` блок + суворий `responseSchema`), передача таймзони.
+  - Опціональний Telegram-конектор (`bot.go`): безпечний старт без `TG_BOT_TOKEN`, обробка `/start link_<token>`.
+  - Контейнер `app.go`: збирання роутера Chi, CORS, логування `log/slog` та монтування модулів.
+- **Перевірка:** unit-тести AI-клієнта (з мок HTTP-сервером Gemini) та ініціалізації `core.App`.
+
+#### [ ] План `#005` (`[BE-Finance]`): Модуль Фінансів — Шар 3: Моделі, Міграції та Репозиторій БД (`repository.go`)
+- **Файли:** `internal/modules/finance/model.go`, `internal/modules/finance/repository.go`, `internal/modules/finance/repository_test.go`.
+- **Зміст:**
+  - Міграції таблиць `fin_categories` та `fin_transactions` (суми в копійках `amount_minor`, поле `idempotency_key`).
+  - Сід базових системних категорій витрат і доходів для нового воркспейсу.
+  - Інтерфейс `Repository` та SQLite-реалізація (параметризовані SQL-запити з обов'язковим `WHERE workspace_id = ?`, дедуплікація за `idempotency_key`, агрегація `summary` та розбивка по категоріях за `day` / `week` / `month`).
+- **Перевірка:** інтеграційні тести репозиторію на in-memory SQLite (`go test ./internal/modules/finance/...`).
+
+#### [ ] План `#006` (`[BE-Finance]`): Модуль Фінансів — Шар 2 (`service.go`) + Шар 1 (`http_handler.go`, `bot_handler.go`) + `cmd/app/main.go`
+- **Файли:** `internal/modules/finance/service.go`, `internal/modules/finance/service_test.go`, `internal/modules/finance/http_handler.go`, `internal/modules/finance/bot_handler.go`, `internal/modules/finance/module.go`, `cmd/app/main.go`.
+- **Зміст:**
+  - Чиста бізнес-логіка в `service.go` (без імпорту `database/sql`): динамічна JSON Schema з `enum` категорій воркспейсу, розбивка чека на кілька транзакцій, конвертація в копійки, ідемпотентність, розрахунок відсотків аналітики.
+  - Табличні unit-тести `service_test.go` з мок-репозиторієм та мок-AI.
+  - Тонкі контролери `http_handler.go` (`/parse`, `/transactions`, `/summary`, `/categories`) та `bot_handler.go` (голос/текст + inline-кнопка `❌ Скасувати`).
+  - Точка входу `cmd/app/main.go`.
+- **Перевірка:** повністю робочий Бекенд + Telegram-бот, зелений `go test ./...` (включно з `arch_test.go` та `service_test.go`).
+
+---
+
+### Частина Б: Фронтенд — Mobile-First Додаток (`web/`)
+
+#### [ ] План `#007` (`[FE-Core]`): Ініціалізація React/Vite/Tailwind/Capacitor/PWA, Конфіг та Двомовність (`i18n`: `uk` + `en`)
+- **Файли:** `web/package.json`, `web/vite.config.ts`, `web/capacitor.config.ts`, `web/.env.example`, `web/src/core/config.ts`, `web/src/core/i18n/locales/uk.ts`, `web/src/core/i18n/locales/en.ts`, `web/src/core/i18n/I18nContext.tsx`, `web/src/core/utils/format.ts`.
+- **Зміст:**
+  - Налаштування Vite + React + TypeScript + Tailwind CSS + Lucide + `vite-plugin-pwa` + Capacitor.
+  - Єдиний конфіг `web/src/core/config.ts` (єдине місце для `import.meta.env`).
+  - Двомовна система `i18n` (`uk.ts` та `en.ts` зі суворою перевіркою типів `TranslationSchema`, мапінгом усіх `ERR_*` та системних категорій).
+  - Спільні DRY-утиліти (`formatMoneyMinor`, `formatDate`, `getCategoryLabel`).
+- **Перевірка:** `npm run build` (`tsc`) та `go test ./...` (`arch_test.go` для `web/src/`).
+
+#### [ ] План `#008` (`[FE-Core]`): Мережевий API-клієнт, Офлайн-черга (`IndexedDB`) та Тактильна вібрація (`Haptics`)
+- **Файли:** `web/src/core/api/client.ts`, `web/src/core/offline/queue.ts`, `web/src/core/offline/useOfflineQueue.ts`, `web/src/core/haptics/haptics.ts`.
+- **Зміст:**
+  - Єдиний HTTP-клієнт з автопідстановкою JWT, `X-Workspace-ID`, перекладом `error_code` та обробкою `402 Payment Required` (з перевіркою `Capacitor.isNativePlatform()` для дотримання правил App Store).
+  - Офлайн-черга в `IndexedDB` (`queue.ts`): локальне збереження голосових аудіо-блобів і тексту з генерацією `idempotency_key` (UUIDv4) при відсутності мережі або таймауті + автоматична фонова синхронізація при появі інтернету.
+  - Обгортка вібро-відгуку (`@capacitor/haptics` з фолбеком на Web Vibration API).
+- **Перевірка:** `npm run build` та `go test ./...`.
+
+#### [ ] План `#009` (`[FE-Core]`): Авторизація, Mobile-First Layout (Нижній Таб-Бар) та Екран «Простір»
+- **Файли:** `web/src/core/auth/AuthContext.tsx`, `web/src/core/auth/LoginPage.tsx`, `web/src/core/auth/RegisterPage.tsx`, `web/src/core/layout/AppLayout.tsx`, `web/src/core/workspace/WorkspacePage.tsx`, `web/src/core/workspace/PaywallModal.tsx`.
+- **Зміст:**
+  - Екрани входу та реєстрації з миттєвим перемикачем мови `UA | EN`.
+  - Mobile-First `AppLayout` із нижнім таб-баром під великий палець (`Пульт` | `Аналітика` | `Простір`), підтримкою `Safe Area` iPhone та адаптивним виглядом для ПК.
+  - Екран «Простір»: перемикання між воркспейсами («Мій ФОП» / «Сім'я»), генерація інвайт-коду для приєднання дружини/партнера, підключення Telegram-бота за одноразовим лінком, індикатор статусу підписки/тріалу та модалка `PaywallModal` (з розрізненням Web vs Native App Store).
+- **Перевірка:** повноцінний цикл реєстрації, входу, перемикання мов та приєднання другого учасника у браузері.
+
+#### [ ] План `#010` (`[FE-Finance]`): Модуль Фінансів — Екран «Пульт» (Керування однією рукою та запис голосу)
+- **Файли:** `web/src/modules/finance/api.ts`, `web/src/modules/finance/hooks/useFinance.ts`, `web/src/modules/finance/components/BigVoiceButton.tsx`, `web/src/modules/finance/components/QuickTextInput.tsx`, `web/src/modules/finance/components/OfflineQueueBanner.tsx`, `web/src/modules/finance/components/BalanceCard.tsx`, `web/src/modules/finance/components/RecentTransactions.tsx`.
+- **Зміст:**
+  - 3-шаровий поділ на фронті: типізований `finance/api.ts` → хук бізнес-логіки `useFinance.ts` (координація запису голосу, офлайн-черги, вібрації та списку операцій) → чисті UI-компоненти.
+  - Велика кнопка запису голосу під великий палець (`BigVoiceButton` з автовизначенням `audio/webm` або `audio/mp4` для iOS Safari), рядок швидкого тексту, індикатор черги офлайн-записів, баланс за сьогодні/місяць та список останніх 5 операцій із кнопкою швидкого скасування (`Скасувати`).
+- **Перевірка:** запис голосу й тексту з телефону/браузера, перевірка збереження в офлайн-чергу при вимкненій мережі та миттєвого скасування запису.
+
+#### [ ] План `#011` (`[FE-Finance]`): Модуль Фінансів — Екран «Аналітика та Історія» + Власні Категорії
+- **Файли:** `web/src/modules/finance/components/CategoryStats.tsx`, `web/src/modules/finance/components/TransactionList.tsx`, `web/src/modules/finance/components/CategoryManagerModal.tsx`, `web/src/modules/finance/FinancePage.tsx`, `web/src/App.tsx`.
+- **Зміст:**
+  - Вкладка «Аналітика та Історія»: перемикач періодів (`День` | `Тиждень` | `Місяць`), візуальна розбивка витрат і доходів по категоріях (сума, відсоток, прогрес-бар).
+  - Повний список операцій за обраний період із відображенням автора запису (хто з учасників простору додав витрату) та кнопкою видалення.
+  - Додавання власних кастомних категорій у воркспейс (які автоматично підхоплюються AI-парсером).
+- **Перевірка:** повна перевірка аналітики, фільтрів періодів та кастомних категорій двома мовами (`uk` / `en`).
+
+---
+
+### Частина В: Фінальна Збірка та Поле-Тест на iPhone
+
+#### [ ] План `#012` (`[Full-Stack]`): Вбудовування `//go:embed`, Скрипт HTTPS-тунелю та Фінальний E2E-аудит
+- **Файли:** `internal/core/static.go`, оновлення `cmd/app/main.go` та `Makefile`.
+- **Зміст:**
+  - Вбудовування зібраного `web/dist` у єдиний Go-бінарник із підтримкою SPA-роутингу та PWA service worker.
+  - Команда `make tunnel` для запуску захищеного HTTPS-тунелю для тестування мікрофона та спільного простору з двох iPhone.
+  - Фінальний прогін `make check` (`arch_test.go`, unit-тести, `npm run build`).
+- **Перевірка:** запуск єдиного бінарника та живий тест спільного бюджету з двох смартфонів.

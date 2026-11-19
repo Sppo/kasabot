@@ -1,0 +1,28 @@
+# OS & Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Environment & Secrets (NEVER commit real secrets)
+.env
+.env.local
+web/.env
+web/.env.local
+
+# SQLite Database Files
+*.db
+*.db-wal
+*.db-shm
+
+# Go Build Artifacts
+kasabot
+bin/
+dist/
+coverage.out
+
+# Frontend & Capacitor
+web/node_modules/
+web/dist/
+web/ios/App/Pods/
+web/android/.gradle/
+web/android/app/build/
