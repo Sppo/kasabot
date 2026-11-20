@@ -29,6 +29,12 @@ const (
 	defaultCurrency               = "UAH"
 	defaultLogDir                 = "logs"
 	defaultLogRetentionDays       = 0
+	defaultBcryptCost             = 12
+	minBcryptCost                 = 10
+	maxBcryptCost                 = 14
+	defaultLoginMaxAttempts       = 5
+	defaultLoginLockMinutes       = 15
+	defaultMaxWorkspacesPerUser   = 5
 
 	minJWTSecretLength     = 16
 	insecureJWTPlaceholder = "change-me-in-production-min-16-chars"
@@ -36,29 +42,34 @@ const (
 
 // Config зберігає всі операційні налаштування програми, зчитані з .env або змінних середовища.
 type Config struct {
-	Port               int
-	DatabaseURL        string
-	DBMaxConns         int32
-	DBConnectTimeout   time.Duration
-	HTTPTimeout        time.Duration
-	MaxJSONBodyBytes   int64
-	JWTSecret          string
-	JWTTTL             time.Duration
-	GeminiAPIKey       string
-	GeminiModel        string
-	AIRequestTimeout   time.Duration
-	MaxAudioSizeBytes  int64
-	TrialDays          int
-	TrialDailyAILimit  int
-	ActiveDailyAILimit int
-	WorkspaceInviteTTL time.Duration
-	TGBotToken         string
-	TGLinkTokenTTL     time.Duration
-	DefaultTimezone    string
-	DefaultLocation    *time.Location
-	DefaultCurrency    string
-	LogDir             string
-	LogRetentionDays   int
+	Port                 int
+	DatabaseURL          string
+	DBMaxConns           int32
+	DBConnectTimeout     time.Duration
+	HTTPTimeout          time.Duration
+	MaxJSONBodyBytes     int64
+	JWTSecret            string
+	JWTTTL               time.Duration
+	GeminiAPIKey         string
+	GeminiModel          string
+	AIRequestTimeout     time.Duration
+	MaxAudioSizeBytes    int64
+	TrialDays            int
+	TrialDailyAILimit    int
+	ActiveDailyAILimit   int
+	WorkspaceInviteTTL   time.Duration
+	TGBotToken           string
+	TGLinkTokenTTL       time.Duration
+	DefaultTimezone      string
+	DefaultLocation      *time.Location
+	DefaultCurrency      string
+	LogDir               string
+	LogRetentionDays     int
+	BcryptCost           int
+	LoginMaxAttempts     int
+	LoginLockDuration    time.Duration
+	MaxWorkspacesPerUser int
+	TGBotUsername        string
 }
 
 // LoadConfig завантажує змінні з .env файлу (у локальну мапу без мутації os.Setenv) та оточення ОС, підставляє дефолти й валідує значення.
@@ -164,30 +175,55 @@ func LoadConfig(envFilePath string) (*Config, error) {
 		return nil, err
 	}
 
+	bcryptCost, err := envIntRange(dotEnv, "BCRYPT_COST", defaultBcryptCost, minBcryptCost, maxBcryptCost)
+	if err != nil {
+		return nil, err
+	}
+
+	loginMaxAttempts, err := envPositiveInt(dotEnv, "LOGIN_MAX_ATTEMPTS", defaultLoginMaxAttempts)
+	if err != nil {
+		return nil, err
+	}
+
+	loginLockMinutes, err := envPositiveInt(dotEnv, "LOGIN_LOCK_MINUTES", defaultLoginLockMinutes)
+	if err != nil {
+		return nil, err
+	}
+
+	maxWorkspacesPerUser, err := envPositiveInt(dotEnv, "MAX_WORKSPACES_PER_USER", defaultMaxWorkspacesPerUser)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
-		Port:               port,
-		DatabaseURL:        databaseURL,
-		DBMaxConns:         int32(dbMaxConns),
-		DBConnectTimeout:   time.Duration(dbConnectTimeoutSec) * time.Second,
-		HTTPTimeout:        time.Duration(httpTimeoutSec) * time.Second,
-		MaxJSONBodyBytes:   maxJSONBytes,
-		JWTSecret:          jwtSecret,
-		JWTTTL:             time.Duration(jwtTTLHours) * time.Hour,
-		GeminiAPIKey:       envString(dotEnv, "GEMINI_API_KEY", ""),
-		GeminiModel:        envString(dotEnv, "GEMINI_MODEL", defaultGeminiModel),
-		AIRequestTimeout:   time.Duration(aiTimeoutSec) * time.Second,
-		MaxAudioSizeBytes:  maxAudioBytes,
-		TrialDays:          trialDays,
-		TrialDailyAILimit:  trialAILimit,
-		ActiveDailyAILimit: activeAILimit,
-		WorkspaceInviteTTL: time.Duration(inviteTTLHours) * time.Hour,
-		TGBotToken:         envString(dotEnv, "TG_BOT_TOKEN", ""),
-		TGLinkTokenTTL:     time.Duration(tgLinkTTLMin) * time.Minute,
-		DefaultTimezone:    tzName,
-		DefaultLocation:    loc,
-		DefaultCurrency:    currency,
-		LogDir:             logDir,
-		LogRetentionDays:   logRetentionDays,
+		Port:                 port,
+		DatabaseURL:          databaseURL,
+		DBMaxConns:           int32(dbMaxConns),
+		DBConnectTimeout:     time.Duration(dbConnectTimeoutSec) * time.Second,
+		HTTPTimeout:          time.Duration(httpTimeoutSec) * time.Second,
+		MaxJSONBodyBytes:     maxJSONBytes,
+		JWTSecret:            jwtSecret,
+		JWTTTL:               time.Duration(jwtTTLHours) * time.Hour,
+		GeminiAPIKey:         envString(dotEnv, "GEMINI_API_KEY", ""),
+		GeminiModel:          envString(dotEnv, "GEMINI_MODEL", defaultGeminiModel),
+		AIRequestTimeout:     time.Duration(aiTimeoutSec) * time.Second,
+		MaxAudioSizeBytes:    maxAudioBytes,
+		TrialDays:            trialDays,
+		TrialDailyAILimit:    trialAILimit,
+		ActiveDailyAILimit:   activeAILimit,
+		WorkspaceInviteTTL:   time.Duration(inviteTTLHours) * time.Hour,
+		TGBotToken:           envString(dotEnv, "TG_BOT_TOKEN", ""),
+		TGBotUsername:        strings.TrimPrefix(envString(dotEnv, "TG_BOT_USERNAME", ""), "@"),
+		TGLinkTokenTTL:       time.Duration(tgLinkTTLMin) * time.Minute,
+		DefaultTimezone:      tzName,
+		DefaultLocation:      loc,
+		DefaultCurrency:      currency,
+		LogDir:               logDir,
+		LogRetentionDays:     logRetentionDays,
+		BcryptCost:           bcryptCost,
+		LoginMaxAttempts:     loginMaxAttempts,
+		LoginLockDuration:    time.Duration(loginLockMinutes) * time.Minute,
+		MaxWorkspacesPerUser: maxWorkspacesPerUser,
 	}, nil
 }
 

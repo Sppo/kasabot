@@ -125,6 +125,8 @@ CREATE TABLE IF NOT EXISTS workspace_members (
 	PRIMARY KEY (workspace_id, user_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_workspace_members_user_id ON workspace_members(user_id);
+
 CREATE TABLE IF NOT EXISTS workspace_invites (
 	code TEXT PRIMARY KEY,
 	workspace_id BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

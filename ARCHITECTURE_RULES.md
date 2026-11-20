@@ -13,6 +13,7 @@ This file defines non-negotiable architectural, security, and data invariants fo
 2. **Core Independence (`NEVER` import modules into core):**
    - `internal/core` **MUST NEVER** import anything from `internal/modules/*`.
    - Dependencies flow strictly one way: `cmd/app` -> `internal/modules/*` -> `internal/core`.
+   - Inside `internal/core`, SQL/pgx is isolated in `store.go` and `database.go`; `auth.go`, `workspace.go`, and `middleware.go` **MUST NEVER** import `pgx` or `database/sql`.
 
 3. **Strict 3-Layer Module Separation (`Handler -> Service -> Repository`):**
    - **Handlers (`http_handler.go`, `bot_handler.go`):** **MUST NEVER** import `"database/sql"` or `github.com/jackc/pgx/*`, or access `Repository` directly. Handlers **ONLY** parse input, call `service.go`, and return JSON/Telegram responses. Zero SQL or business math inside handlers.

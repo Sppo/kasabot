@@ -106,12 +106,18 @@ func checkGoArchitecture(rootDir string) []string {
 			}
 		}
 
-		// 1. Core Independence: internal/core НІКОЛИ не імпортує internal/modules/*
+		// 1. Core Independence & Core Layering:
+		// internal/core НІКОЛИ не імпортує internal/modules/*;
+		// auth.go, workspace.go, middleware.go не імпортують pgx/database/sql (SQL лише в store.go/database.go).
 		if strings.HasPrefix(relPath, "internal/core/") {
+			isCoreServiceOrMW := fileName == "auth.go" || fileName == "workspace.go" || fileName == "middleware.go"
 			for _, imp := range fullAST.Imports {
 				impPath := strings.Trim(imp.Path.Value, `"`)
 				if strings.Contains(impPath, "internal/modules") {
 					violations = append(violations, "[CORE->MODULE] "+relPath+": internal/core MUST NEVER import module package "+impPath)
+				}
+				if isCoreServiceOrMW && isSQLPackage(impPath) {
+					violations = append(violations, "[CORE-LAYER] "+relPath+": core business/middleware MUST NOT import SQL package "+impPath+" (SQL only in store.go/database.go)")
 				}
 			}
 		}
@@ -686,6 +692,12 @@ func TestArchitectureValidatorCatchesViolations(t *testing.T) {
 				relFile:     "internal/core/bad.go",
 				code:        `package core; import _ "kasabot/internal/modules/finance"`,
 				expectToken: "[CORE->MODULE]",
+			},
+			{
+				name:        "core auth.go imports pgx",
+				relFile:     "internal/core/auth.go",
+				code:        `package core; import _ "github.com/jackc/pgx/v5/pgxpool"`,
+				expectToken: "[CORE-LAYER]",
 			},
 			{
 				name:        "module A imports module B",

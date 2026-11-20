@@ -176,6 +176,16 @@ func TestLoadConfigValidationErrors(t *testing.T) {
 			t.Fatalf("expected >= 0 error for LOG_RETENTION_DAYS=-1, got: %v", err)
 		}
 	})
+
+	t.Run("out-of-range bcrypt cost fails", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", testDBURL)
+		t.Setenv("JWT_SECRET", "valid-secret-at-least-16-chars")
+		t.Setenv("BCRYPT_COST", "9")
+		_, err := LoadConfig("")
+		if err == nil || !strings.Contains(err.Error(), "must be between 10 and 14") {
+			t.Fatalf("expected range error for BCRYPT_COST=9, got: %v", err)
+		}
+	})
 }
 
 func TestDecodeJSONStrictValidation(t *testing.T) {

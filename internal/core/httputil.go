@@ -14,6 +14,7 @@ type ctxKey int
 const (
 	ctxKeyUserID ctxKey = iota + 1
 	ctxKeyWorkspaceID
+	ctxKeyWorkspaceRole
 	ctxKeyRequestID
 )
 
@@ -43,6 +44,34 @@ func WriteErrorWithID(w http.ResponseWriter, status int, code ErrorCode, message
 		ErrorID:   errorID,
 		Message:   message,
 	})
+}
+
+// WriteAppError мапить AppError (або неочікувану помилку) у JSON-відповідь; 5xx помилки логуються з error_id.
+func WriteAppError(w http.ResponseWriter, r *http.Request, logger *Logger, err error) {
+	var appErr *AppError
+	if !errors.As(err, &appErr) {
+		var errorID string
+		if logger != nil {
+			errorID = logger.LogError(r.Context(), ErrInternal, err.Error())
+		} else {
+			errorID = NewErrorID()
+		}
+		WriteErrorWithID(w, http.StatusInternalServerError, ErrInternal, "internal server error", errorID)
+		return
+	}
+
+	if appErr.Status >= http.StatusInternalServerError {
+		var errorID string
+		if logger != nil {
+			errorID = logger.LogError(r.Context(), appErr.Code, appErr.Error())
+		} else {
+			errorID = NewErrorID()
+		}
+		WriteErrorWithID(w, appErr.Status, appErr.Code, appErr.Message, errorID)
+		return
+	}
+
+	WriteError(w, appErr.Status, appErr.Code, appErr.Message)
 }
 
 // DecodeJSON декодує JSON-тіло запиту з обмеженням розміру maxBytes, забороною невідомих полів та перевіркою на зайвий хвіст після першого JSON-об'єкта.
@@ -90,6 +119,17 @@ func WithWorkspaceID(ctx context.Context, workspaceID int64) context.Context {
 func WorkspaceIDFromCtx(ctx context.Context) (int64, bool) {
 	id, ok := ctx.Value(ctxKeyWorkspaceID).(int64)
 	return id, ok && id > 0
+}
+
+// WithWorkspaceRole зберігає роль користувача у поточному воркспейсі в context.Context.
+func WithWorkspaceRole(ctx context.Context, role string) context.Context {
+	return context.WithValue(ctx, ctxKeyWorkspaceRole, role)
+}
+
+// WorkspaceRoleFromCtx повертає роль користувача у поточному воркспейсі з контексту запиту.
+func WorkspaceRoleFromCtx(ctx context.Context) string {
+	role, _ := ctx.Value(ctxKeyWorkspaceRole).(string)
+	return role
 }
 
 // WithRequestID зберігає ID HTTP-запиту в context.Context.

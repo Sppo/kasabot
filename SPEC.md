@@ -44,12 +44,15 @@ kasabot/
 ├── internal/
 │   ├── core/
 │   │   ├── app.go                  # Контейнер залежностей (DB, AI, Config, Auth, Registry)
-│   │   ├── config.go               # Єдина точка зчитування .env (PORT, DATABASE_URL, JWT_SECRET, GEMINI_API_KEY тощо)
-│   │   ├── errors.go               # Єдиний реєстр констант машиночитаних кодів помилок (ERR_*) для i18n
-│   │   ├── httputil.go             # Спільні DRY-хелпери: WriteJSON, WriteError, DecodeJSON, контекст (UserID, WorkspaceID)
+│   │   ├── config.go               # Єдина точка зчитування .env (PORT, DATABASE_URL, JWT_SECRET, BCRYPT_COST, LOGIN_*, MAX_WORKSPACES_PER_USER, TG_BOT_USERNAME тощо)
+│   │   ├── errors.go               # Єдиний реєстр констант кодів помилок (ERR_*) та AppError
+│   │   ├── httputil.go             # Спільні DRY-хелпери: WriteJSON, WriteError, WriteAppError, DecodeJSON, контекст (UserID, WorkspaceID, Role)
 │   │   ├── database.go             # Підключення до PostgreSQL (pgxpool), базові таблиці ядра та раннер міграцій
-│   │   ├── auth.go                 # Реєстрація/логін (Email+Password), JWT middleware, коди прив'язки Telegram
-│   │   ├── workspace.go            # CRUD воркспейсів, інвайти партнерів, перемикання активного workspace
+│   │   ├── store.go                # Увесь SQL до системних таблиць ядра (CoreStore / PGStore)
+│   │   ├── auth.go                 # Сервіс: реєстрація/логін (Email+Password, bcrypt, JWT HS256, brute-force ліміт), токени Telegram
+│   │   ├── workspace.go            # Сервіс: воркспейси, інвайти партнерів, підписка (402) та квоти AI (429)
+│   │   ├── middleware.go           # Auth (JWT), Workspace (X-Workspace-ID / active_workspace_id), RequireOwner
+│   │   ├── auth_handler.go         # Тонкі HTTP-хендлери та роутер для /auth/* і /workspaces/*
 │   │   ├── ai.go                   # Універсальний клієнт Gemini API (текст + аудіо -> суворий JSON Schema)
 │   │   ├── bot.go                  # Опціональна ініціалізація Telegram-бота, прив'язка /start link_<code>, роутинг
 │   │   └── module.go               # Інтерфейс Module та реєстр модулів

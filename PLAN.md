@@ -10,8 +10,8 @@
 
 ## Поточна активна задача (Active Task)
 
-- **Статус:** `Немає активної задачі (очікує старту Плану #003)`
-- **Файл плану:** — *(наступний: `plans/003-be-core-auth-and-workspaces.md`)*
+- **Статус:** `Немає активної задачі (наступний: План #003b — реструктуризація internal/core)`
+- **Файл плану:** —
 - **Короткий опис:** —
 
 ---
@@ -26,6 +26,7 @@
 | 002a | Правила та документація: перехід на PostgreSQL і нове правило залежностей | `docs` / `rules` | [002a-rules-postgres-and-dependencies.md](./plans/archive/002a-rules-postgres-and-dependencies.md) | Закрито |
 | 003a | Логування у файли по днях, окремий файл помилок та `error_id` | `BE-Core` | [003a-be-core-logging.md](./plans/archive/003a-be-core-logging.md) | Закрито |
 | 002 | PostgreSQL (`pgx`), Раннер Міграцій та Інтерфейс Модуля | `BE-Core` | [002-be-core-db-and-migrations.md](./plans/archive/002-be-core-db-and-migrations.md) | Закрито |
+| 003 | Авторизація (JWT), Workspaces (інвайти), Telegram-токени та квоти підписки/AI | `BE-Core` | [003-be-core-auth-and-workspaces.md](./plans/archive/003-be-core-auth-and-workspaces.md) | Закрито |
 
 ---
 
@@ -60,7 +61,7 @@
   - Контракт `core.Module` та реєстр модулів.
 - **Перевірка:** інтеграційні тести на реальному Postgres (системні таблиці, ідемпотентність міграцій, відкат, паралельний запуск; `make check`).
 
-#### [ ] План `#003` (`[BE-Core]`): Авторизація (JWT), Workspaces (Інвайти) та Квоти Підписки/AI
+#### [x] План `#003` (`[BE-Core]`): Авторизація (JWT), Workspaces (Інвайти) та Квоти Підписки/AI ([архів](./plans/archive/003-be-core-auth-and-workspaces.md))
 - **Файли:** `internal/core/auth.go`, `internal/core/workspace.go`, `internal/core/auth_test.go`.
 - **Зміст:**
   - Реєстрація та логін (`bcrypt` + `JWT`), авто-створення дефолтного воркспейсу з 14-денним `trial` та викликом `OnWorkspaceCreated`.
@@ -68,6 +69,11 @@
   - Інвайт-коди для приєднання партнера/дружини до воркспейсу та одноразові токени прив'язки Telegram.
   - Перевірка активності підписки (`402 Payment Required` для Read-Only режиму) та денних квот AI (`429 Too Many Requests` зі списанням квоти лише після успішної відповіді AI).
 - **Перевірка:** unit-тести реєстрації, логіну, інвайтів, ролей та блокування `402` / `429`.
+
+#### [ ] План `#003b` (`[BE-Core]`): Реструктуризація `internal/core` на підпакети (без зміни поведінки)
+- **Коли:** після закриття `#003` і **до** `#004`/`#005` (поки модулі не імпортують `core`).
+- **Мета:** замість 20+ файлів в одній папці — підпакети за відповідальністю (орієнтовно `config`, `logging`, `db`, `auth`, `workspace`, `httpx`, `apperr`), щоб зорієнтуватися в коді було легко, а `arch_test.go` міг забороняти небажані імпорти між ними.
+- **Умови:** жодних змін логіки; лише переміщення, імпорти та оновлення `arch_test.go`, `ARCHITECTURE_RULES.md`, `SPEC.md`; тести проходять до і після (`make check`); без циклічних імпортів.
 
 #### [x] План `#003a` (`[BE-Core]`): Логування у файли по днях, окремий файл помилок та `error_id` ([архів](./plans/archive/003a-be-core-logging.md))
 - **Файли:** `internal/core/logger.go`, `internal/core/logger_test.go`, `internal/core/config.go`, `internal/core/config_test.go`, `.env.example`.
