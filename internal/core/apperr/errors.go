@@ -30,6 +30,7 @@ const (
 	ErrAudioTooLarge    ErrorCode = "ERR_AUDIO_TOO_LARGE"
 	ErrUnsupportedMedia ErrorCode = "ERR_UNSUPPORTED_MEDIA"
 	ErrAIParseFailed    ErrorCode = "ERR_AI_PARSE_FAILED"
+	ErrAIUnavailable    ErrorCode = "ERR_AI_UNAVAILABLE"
 )
 
 // AppError представляє контрольовану бізнес- або HTTP-помилку з відповідним статусом та ErrorCode.

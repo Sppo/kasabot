@@ -44,13 +44,13 @@ This file defines non-negotiable architectural, security, and data invariants fo
    - **ALWAYS** use parameterized SQL queries (`$1, $2, ...` placeholders) — **NEVER** format SQL with `fmt.Sprintf` or string concatenation.
    - Verify membership in `workspace_members` on every workspace request. Owner-only operations (creating invites, deleting workspace) **MUST** verify `role = 'owner'`.
 
-2. **Audio Validation & Prompt Injection Defense:**
-   - Enforce `http.MaxBytesReader` using `MAX_AUDIO_SIZE_BYTES` and validate audio MIME type against an explicit allowlist (`audio/ogg`, `audio/webm`, `audio/mp4`, `audio/mpeg`, `audio/wav`, `audio/aac`, `audio/x-m4a`).
+2. **Audio Validation & Prompt Injection Defense (`internal/core/ai`):**
+   - Enforce `http.MaxBytesReader` / size check using `MAX_AUDIO_SIZE_BYTES` (`ERR_AUDIO_TOO_LARGE`) and validate normalized audio MIME type against an explicit allowlist (`audio/ogg`, `audio/webm`, `audio/mp4`, `audio/mpeg`, `audio/wav`, `audio/aac`, `audio/x-m4a`, else `ERR_UNSUPPORTED_MEDIA`).
    - Pass user text/audio strictly in the `user` content block (never concatenated into `systemInstruction`). Enforce Gemini `responseSchema` with a strict category `enum` and validate parsed output in `service.go` (`amount_minor > 0`, category belongs to workspace).
 
 3. **Offline Queue Idempotency & AI Quota Fairness:**
    - **Idempotency:** Every offline/mobile parse request may include an `idempotency_key` (UUIDv4). `fin_transactions` stores `idempotency_key` (or deduplicates per workspace) so retries from `OfflineQueue` **NEVER** create duplicate transactions or charge AI quota twice.
-   - **Quota Deduction:** Increment `workspaces.ai_requests_today` **ONLY** after a successful response from Gemini API (do not deduct user quota on network timeouts or `5xx` upstream failures).
+   - **Quota Deduction:** Modules call `EnsureAIAllowed` → `ai.Client.Parse` → `ConsumeAIQuota`. Increment `workspaces.ai_requests_today` **ONLY** after a successful response from `internal/core/ai` (do not deduct user quota on retryable `ERR_AI_UNAVAILABLE` [503: `429`, `5xx`, timeout, network], non-retryable `ERR_AI_PARSE_FAILED` [422: `400`, `404`, `422`, invalid/blocked output], or `ERR_INTERNAL` [500: `401`, `403` key config error]).
 
 ---
 

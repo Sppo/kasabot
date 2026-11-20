@@ -175,9 +175,13 @@ type Module interface {
 ```
 
 ### 4.4. AI-клієнт (`ai.Client`, пакет `internal/core/ai`)
-- Приймає текстовий запит або аудіо-потік (`[]byte`, `mimeType`), системний промпт та `responseSchema` (JSON Schema).
-- Обмеження безпеки на аудіо: максимум **3 МБ** на один файл.
-- Завжди передає в системний промпт поточну дату/час (`Europe/Kyiv`), щоб AI коректно розпізнавав відносні дати (*«вчора»*, *«в суботу»*).
+- Контракт: `Parse(ctx context.Context, req Request) (Result, error)`, де `Request` містить `SystemPrompt`, рівно одне з `Text` або `Audio` (`[]byte` + `MimeType`), та `ResponseSchema` (`map[string]any`); `Result` повертає сирий валідний `JSON` (`json.RawMessage`).
+- Валідація входу до мережі: розмір аудіо ≤ `MAX_AUDIO_SIZE_BYTES` (за замовчуванням **3 МБ**, інакше `413 ERR_AUDIO_TOO_LARGE`), нормалізований MIME з білого списку (`415 ERR_UNSUPPORTED_MEDIA`), рівно одне з `Text`/`Audio` (`400 ERR_VALIDATION`).
+- Захист від prompt injection та таймзона: у `systemInstruction` передається лише промпт модуля та поточна дата/час у `DEFAULT_TIMEZONE` (`Europe/Kyiv`), вміст користувача — виключно в `contents[role=user]`, відповідь обмежується `responseMimeType: application/json` та `responseSchema`.
+- Коди помилок та порядок квоти: модулі виконують `EnsureAIAllowed` → `ai.Client.Parse` → `ConsumeAIQuota`; квота не списується за жодної помилки:
+  - **Повторювані (офлайн-черга може повторити):** `503 ERR_AI_UNAVAILABLE` (`429`, `5xx`, таймаут, мережеві збої).
+  - **Неповторювані:** `422 ERR_AI_PARSE_FAILED` (`400`, `404`, `422` від Gemini, невалідний/порожній JSON або блокування).
+  - **Помилка конфігурації ключа:** `500 ERR_INTERNAL` (`401`, `403` від Gemini, із `error_id` у логах).
 
 ### 4.5. Підписка, Тріал та Захист лімітів AI (Монетизація)
 - **Безкоштовний старт (14 днів Trial):** При реєстрації кожен новий `workspace` отримує `plan_status = 'trial'` та `subscription_ends_at = NOW + 14 days`.

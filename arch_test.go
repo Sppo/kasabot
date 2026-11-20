@@ -289,6 +289,7 @@ func isAllowedCoreEdge(from, to string) bool {
 		"logging":  {"apperr": true, "config": true, "reqctx": true},
 		"httpx":    {"apperr": true, "logging": true, "reqctx": true},
 		"db":       {"apperr": true, "config": true, "logging": true, "module": true},
+		"ai":       {"apperr": true, "config": true, "logging": true},
 		"accounts": {"apperr": true, "config": true, "httpx": true, "logging": true, "module": true, "reqctx": true},
 		"testkit":  {"apperr": true, "config": true, "db": true, "logging": true},
 	}
@@ -743,6 +744,12 @@ func TestArchitectureValidatorCatchesViolations(t *testing.T) {
 				name:        "core apperr imports config",
 				relFile:     "internal/core/apperr/bad.go",
 				code:        `package apperr; import _ "kasabot/internal/core/config"`,
+				expectToken: "[CORE-DAG]",
+			},
+			{
+				name:        "core ai imports accounts",
+				relFile:     "internal/core/ai/bad.go",
+				code:        `package ai; import _ "kasabot/internal/core/accounts"`,
 				expectToken: "[CORE-DAG]",
 			},
 			{

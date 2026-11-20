@@ -10,7 +10,7 @@
 
 ## Поточна активна задача (Active Task)
 
-- **Статус:** `Немає активної задачі (наступний: План #004 — AI-клієнт Gemini, Telegram-бот та контейнер app.go)`
+- **Статус:** `Немає активної задачі (наступний: План #004d — тюнінг Gemini, далі #004b Telegram, #004c app.go)`
 - **Файл плану:** —
 - **Короткий опис:** —
 
@@ -28,6 +28,7 @@
 | 002 | PostgreSQL (`pgx`), Раннер Міграцій та Інтерфейс Модуля | `BE-Core` | [002-be-core-db-and-migrations.md](./plans/archive/002-be-core-db-and-migrations.md) | Закрито |
 | 003 | Авторизація (JWT), Workspaces (інвайти), Telegram-токени та квоти підписки/AI | `BE-Core` | [003-be-core-auth-and-workspaces.md](./plans/archive/003-be-core-auth-and-workspaces.md) | Закрито |
 | 003b | Реструктуризація `internal/core` на підпакети (без зміни поведінки) | `BE-Core` | [003b-be-core-restructure.md](./plans/archive/003b-be-core-restructure.md) | Закрито |
+| 004a | Універсальний клієнт Gemini AI (`internal/core/ai`) | `BE-Core` | [004a-be-core-ai-client.md](./plans/archive/004a-be-core-ai-client.md) | Закрито |
 
 ---
 
@@ -84,13 +85,38 @@
   - Хук для Telegram-сповіщень (саме сповіщення робляться в Плані `#004`).
 - **Перевірка:** unit-тести запису по днях, видалення старих файлів та відсутності секретів у логах (`make check`).
 
-#### [ ] План `#004` (`[BE-Core]`): Універсальний Клієнт Gemini AI, Опціональний Telegram-ядро та Контейнер `app.go`
-- **Файли:** `internal/core/ai/client.go`, `internal/core/bot/bot.go`, `internal/core/app/app.go`, `internal/core/ai/client_test.go`.
+#### [x] План `#004a` (`[BE-Core]`): Універсальний Клієнт Gemini AI (`internal/core/ai`) ([архів](./plans/archive/004a-be-core-ai-client.md))
+- **Файли:** `internal/core/ai/client.go`, `internal/core/ai/gemini.go`, `internal/core/ai/client_test.go`, `internal/core/apperr/errors.go`. План: [004a-be-core-ai-client.md](./plans/archive/004a-be-core-ai-client.md).
 - **Зміст:**
-  - Клієнт Gemini API (`ai.go`): прийом тексту або аудіо, перевірка `MAX_AUDIO_SIZE_BYTES` та білого списку MIME-типів, захист від prompt injection (окремий `user` блок + суворий `responseSchema`), передача таймзони.
-  - Опціональний Telegram-конектор (`bot.go`): безпечний старт без `TG_BOT_TOKEN`, обробка `/start link_<token>`.
-  - Контейнер `app.go`: збирання роутера Chi, CORS, логування `log/slog` та монтування модулів.
-- **Перевірка:** unit-тести AI-клієнта (з мок HTTP-сервером Gemini) та ініціалізації `core.App`.
+  - Інтерфейс `ai.Client` (текст або аудіо + системний промпт + `responseSchema` → суворий JSON), реалізація на `net/http` без SDK.
+  - Перевірка `MAX_AUDIO_SIZE_BYTES` та білого списку MIME-типів, захист від prompt injection (вміст користувача лише в ролі `user`), дата/час у `DEFAULT_TIMEZONE`, код `ERR_AI_UNAVAILABLE`; помилки не списують квоту.
+- **Перевірка:** unit-тести з `httptest`-сервером; ручна перевірка `webm`/`mp4` із реальним ключем.
+
+#### [ ] План `#004d` (`[BE-Core]`): Тюнінг параметрів генерації Gemini (після ручної перевірки #004a)
+- **Коли:** після кроку 7 Плану #004a (ручна перевірка `webm`/`mp4` з реальним ключем) і до фінансового модуля (#006), коли видно реальні відповіді моделі.
+- **Файли (орієнтовно):** `internal/core/ai/gemini.go`, `internal/core/ai/client_test.go`, за потреби `internal/core/config/config.go` та `.env.example`.
+- **Результати ручної перевірки, які входять сюди (2026-11-20):**
+  - Змінити типове `GEMINI_MODEL` з `gemini-2.5-flash` (знята для нових ключів, `404`) на `gemini-3.8-flash` у `config.go`, `.env.example`, `SPEC.md` і тестах конфігу; додати необов'язкову запасну модель `GEMINI_FALLBACK_MODEL` на випадок, коли основна перевантажена або знята.
+  - `404` від Gemini означає «модель не існує», тобто помилку налаштування (як `401`/`403`): мапити на `500 ERR_INTERNAL` з `error_id` і логом `gemini_model_not_found`, а не на `422 ERR_AI_PARSE_FAILED`.
+  - `503 high demand` трапляється реально: вирішити, чи робити в клієнті 1–2 швидкі повтори з короткою паузою (в межах `AI_REQUEST_TIMEOUT_SEC`) до того, як віддати `ERR_AI_UNAVAILABLE`; повтор не повинен списувати квоту.
+  - У відповіді було 83 токени «міркування» на 15 токенів відповіді: вимкнути або обмежити (`thinkingConfig`), замірити вплив на якість і затримку.
+- **Зміст:** підібрати за результатами ручних запусків: `temperature` (для розбору витрат бажано низьку, 0–0.2), `maxOutputTokens` і вимкнення «thinking» (`thinkingBudget: 0`) для `gemini-2.5-flash`, щоб зменшити вартість і затримку без втрати якості розбору. Параметри, які користувач захоче міняти без перекомпіляції, виносимо в `.env` з коментарями.
+- **Перевірка:** тест, що параметри потрапляють у запит; ручне порівняння кількох фраз до/після.
+
+#### [ ] План `#004b` (`[BE-Core]`): Опціональний Telegram-конектор (`internal/core/bot`)
+- **Файли:** `internal/core/bot/bot.go`, `internal/core/bot/notifier.go`, `internal/core/bot/bot_test.go`.
+- **Зміст:**
+  - Безпечний старт без `TG_BOT_TOKEN`, обробка `/start link_<token>` через `accounts.AuthService.ConsumeTelegramLinkToken`, відповідь неприв'язаному `telegram_id` з інструкцією.
+  - Асинхронний відправник скорочених сповіщень про помилки (`ErrorHook` логера): канал з обмеженою ємністю, воркер із `context`/graceful shutdown, повільний Telegram не блокує запити; у сповіщенні `error_id`, час, код помилки, без особистих даних.
+- **Перевірка:** unit-тести з мок-API Telegram: прив'язка, безпечний старт, переповнення черги сповіщень без блокування.
+
+#### [ ] План `#004c` (`[BE-Core]`): Контейнер `app.go`, HTTP-сервер та `cmd/app/main.go`
+- **Файли:** `internal/core/app/app.go`, `internal/core/app/app_test.go`, `cmd/app/main.go`.
+- **Зміст:**
+  - Складання Chi-роутера: CORS, request-логування, `accounts.Routes()`, монтування модулів під `/api/v1/<module>` з `Auth` + `Workspace` middleware, запуск міграцій і сіду, graceful shutdown (HTTP, воркер сповіщень, логер).
+  - Рішення про `GEMINI_API_KEY` при старті: зараз його відсутність дає `503 ERR_AI_UNAVAILABLE` лише під час `Parse`; визначити, чи це фатально для запуску (за замовчуванням: ні, сервер стартує, а в лог іде попередження; ручне додавання витрат працює без AI).
+  - Нотатки з ревю #003: довірені проксі й реальний IP клієнта (`.env`) для блокування входу за `cloudflared`; rate-limit на публічні маршрути (`register`, `login`); 5xx відповіді з `error_id`.
+- **Перевірка:** тести ініціалізації `App` і middleware-ланцюжка; ручний цикл `curl`: реєстрація → вхід → `/auth/me` → інвайт → join.
 
 #### [ ] План `#005` (`[BE-Finance]`): Модуль Фінансів — Шар 3: Моделі, Міграції та Репозиторій БД (`repository.go`)
 - **Файли:** `internal/modules/finance/model.go`, `internal/modules/finance/repository.go`, `internal/modules/finance/repository_test.go`.
