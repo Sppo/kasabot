@@ -1,4 +1,4 @@
-package core
+package accounts
 
 import (
 	"context"
@@ -6,6 +6,11 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"kasabot/internal/core/apperr"
+	"kasabot/internal/core/config"
+	"kasabot/internal/core/logging"
+	"kasabot/internal/core/module"
 )
 
 const inviteCodeNumBytes = 12
@@ -19,14 +24,14 @@ type WorkspaceInviteResult struct {
 // WorkspaceService відповідає за воркспейси, інвайти партнерів, підписку та квоти AI.
 type WorkspaceService struct {
 	store    CoreStore
-	cfg      *Config
-	registry *ModuleRegistry
-	logger   *Logger
+	cfg      *config.Config
+	registry *module.ModuleRegistry
+	logger   *logging.Logger
 	now      func() time.Time
 }
 
 // NewWorkspaceService створює сервіс управління воркспейсами.
-func NewWorkspaceService(store CoreStore, cfg *Config, registry *ModuleRegistry, logger *Logger) *WorkspaceService {
+func NewWorkspaceService(store CoreStore, cfg *config.Config, registry *module.ModuleRegistry, logger *logging.Logger) *WorkspaceService {
 	return &WorkspaceService{
 		store:    store,
 		cfg:      cfg,
@@ -51,17 +56,17 @@ func EffectivePlanStatus(ws Workspace, now time.Time) string {
 func (s *WorkspaceService) CreateWorkspace(ctx context.Context, userID int64, name, currency string) (Workspace, error) {
 	cleanName := strings.TrimSpace(name)
 	if cleanName == "" {
-		return Workspace{}, NewAppError(http.StatusBadRequest, ErrValidation, "workspace name is required", nil)
+		return Workspace{}, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "workspace name is required", nil)
 	}
 	if len([]rune(cleanName)) > maxNameLength {
-		return Workspace{}, NewAppError(http.StatusBadRequest, ErrValidation, "workspace name exceeds maximum length", nil)
+		return Workspace{}, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "workspace name exceeds maximum length", nil)
 	}
 
 	curr := strings.ToUpper(strings.TrimSpace(currency))
 	if curr == "" {
 		curr = s.cfg.DefaultCurrency
-	} else if !isValidCurrencyCode(curr) {
-		return Workspace{}, NewAppError(http.StatusBadRequest, ErrValidation, "invalid currency code", nil)
+	} else if !config.IsValidCurrencyCode(curr) {
+		return Workspace{}, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "invalid currency code", nil)
 	}
 
 	trialEndsAt := s.now().Add(time.Duration(s.cfg.TrialDays) * 24 * time.Hour)
@@ -74,7 +79,7 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, userID int64, na
 		for _, mod := range s.registry.Modules() {
 			if seedErr := mod.OnWorkspaceCreated(ctx, ws.ID); seedErr != nil {
 				s.compensateDeleteWorkspace(ctx, userID, ws.ID, "workspace_seed_compensation_failed")
-				return Workspace{}, NewAppError(http.StatusInternalServerError, ErrInternal, "failed to initialize workspace modules", seedErr)
+				return Workspace{}, apperr.NewAppError(http.StatusInternalServerError, apperr.ErrInternal, "failed to initialize workspace modules", seedErr)
 			}
 		}
 	}
@@ -82,7 +87,7 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, userID int64, na
 	if err := s.store.SetActiveWorkspace(ctx, userID, ws.ID); err != nil {
 		// Якщо активація впала після сіду, прибираємо новий воркспейс, щоб не витрачав ліміт користувача
 		s.compensateDeleteWorkspace(ctx, userID, ws.ID, "workspace_activate_compensation_failed")
-		return Workspace{}, NewAppError(http.StatusInternalServerError, ErrInternal, "failed to activate workspace", err)
+		return Workspace{}, apperr.NewAppError(http.StatusInternalServerError, apperr.ErrInternal, "failed to activate workspace", err)
 	}
 
 	ws.PlanStatus = EffectivePlanStatus(ws, s.now())
@@ -99,7 +104,7 @@ func (s *WorkspaceService) compensateDeleteWorkspace(ctx context.Context, userID
 	compCtx, cancel := context.WithTimeout(context.Background(), compensationTimeout)
 	defer cancel()
 	if compErr := s.store.DeleteWorkspace(compCtx, workspaceID); compErr != nil && s.logger != nil {
-		s.logger.LogError(ctx, ErrInternal, logMsg,
+		s.logger.LogError(ctx, apperr.ErrInternal, logMsg,
 			slog.Int64("user_id", userID),
 			slog.Int64("workspace_id", workspaceID),
 			slog.String("error", compErr.Error()),
@@ -127,12 +132,12 @@ func (s *WorkspaceService) CreateInvite(ctx context.Context, userID, workspaceID
 		return WorkspaceInviteResult{}, err
 	}
 	if role != RoleOwner {
-		return WorkspaceInviteResult{}, NewAppError(http.StatusForbidden, ErrForbidden, "only workspace owner can create invites", nil)
+		return WorkspaceInviteResult{}, apperr.NewAppError(http.StatusForbidden, apperr.ErrForbidden, "only workspace owner can create invites", nil)
 	}
 
 	code, err := generateSecureHex(inviteCodeNumBytes)
 	if err != nil {
-		return WorkspaceInviteResult{}, NewAppError(http.StatusInternalServerError, ErrInternal, "failed to generate invite code", err)
+		return WorkspaceInviteResult{}, apperr.NewAppError(http.StatusInternalServerError, apperr.ErrInternal, "failed to generate invite code", err)
 	}
 	expiresAt := s.now().Add(s.cfg.WorkspaceInviteTTL)
 	if err := s.store.CreateInvite(ctx, workspaceID, code, expiresAt); err != nil {
@@ -149,7 +154,7 @@ func (s *WorkspaceService) CreateInvite(ctx context.Context, userID, workspaceID
 func (s *WorkspaceService) JoinWorkspace(ctx context.Context, userID int64, code string) (Workspace, error) {
 	cleanCode := strings.TrimSpace(code)
 	if cleanCode == "" {
-		return Workspace{}, NewAppError(http.StatusBadRequest, ErrInviteInvalidOrExpired, "invite code is required", nil)
+		return Workspace{}, apperr.NewAppError(http.StatusBadRequest, apperr.ErrInviteInvalidOrExpired, "invite code is required", nil)
 	}
 	ws, err := s.store.JoinWorkspaceByInvite(ctx, userID, cleanCode)
 	if err != nil {
@@ -169,7 +174,7 @@ func (s *WorkspaceService) EnsureAIAllowed(ctx context.Context, workspaceID int6
 	now := s.now()
 	status := EffectivePlanStatus(ws, now)
 	if status == PlanStatusExpired {
-		return NewAppError(http.StatusPaymentRequired, ErrSubscriptionExpired, "subscription or trial expired", nil)
+		return apperr.NewAppError(http.StatusPaymentRequired, apperr.ErrSubscriptionExpired, "subscription or trial expired", nil)
 	}
 
 	dailyLimit := s.cfg.TrialDailyAILimit
@@ -186,7 +191,7 @@ func (s *WorkspaceService) EnsureAIAllowed(ctx context.Context, workspaceID int6
 	}
 
 	if usedToday >= dailyLimit {
-		return NewAppError(http.StatusTooManyRequests, ErrAIQuotaExceeded, "daily AI quota exceeded", nil)
+		return apperr.NewAppError(http.StatusTooManyRequests, apperr.ErrAIQuotaExceeded, "daily AI quota exceeded", nil)
 	}
 
 	return nil

@@ -10,7 +10,7 @@
 
 ## Поточна активна задача (Active Task)
 
-- **Статус:** `Немає активної задачі (наступний: План #003b — реструктуризація internal/core)`
+- **Статус:** `Немає активної задачі (наступний: План #004 — AI-клієнт Gemini, Telegram-бот та контейнер app.go)`
 - **Файл плану:** —
 - **Короткий опис:** —
 
@@ -27,6 +27,7 @@
 | 003a | Логування у файли по днях, окремий файл помилок та `error_id` | `BE-Core` | [003a-be-core-logging.md](./plans/archive/003a-be-core-logging.md) | Закрито |
 | 002 | PostgreSQL (`pgx`), Раннер Міграцій та Інтерфейс Модуля | `BE-Core` | [002-be-core-db-and-migrations.md](./plans/archive/002-be-core-db-and-migrations.md) | Закрито |
 | 003 | Авторизація (JWT), Workspaces (інвайти), Telegram-токени та квоти підписки/AI | `BE-Core` | [003-be-core-auth-and-workspaces.md](./plans/archive/003-be-core-auth-and-workspaces.md) | Закрито |
+| 003b | Реструктуризація `internal/core` на підпакети (без зміни поведінки) | `BE-Core` | [003b-be-core-restructure.md](./plans/archive/003b-be-core-restructure.md) | Закрито |
 
 ---
 
@@ -62,7 +63,7 @@
 - **Перевірка:** інтеграційні тести на реальному Postgres (системні таблиці, ідемпотентність міграцій, відкат, паралельний запуск; `make check`).
 
 #### [x] План `#003` (`[BE-Core]`): Авторизація (JWT), Workspaces (Інвайти) та Квоти Підписки/AI ([архів](./plans/archive/003-be-core-auth-and-workspaces.md))
-- **Файли:** `internal/core/auth.go`, `internal/core/workspace.go`, `internal/core/auth_test.go`.
+- **Файли:** `internal/core/accounts/auth.go`, `internal/core/accounts/workspace.go`, `internal/core/accounts/auth_test.go`.
 - **Зміст:**
   - Реєстрація та логін (`bcrypt` + `JWT`), авто-створення дефолтного воркспейсу з 14-денним `trial` та викликом `OnWorkspaceCreated`.
   - Middleware авторизації та перевірки членства/ролі (`owner` | `member`) у `workspace_members`.
@@ -70,7 +71,7 @@
   - Перевірка активності підписки (`402 Payment Required` для Read-Only режиму) та денних квот AI (`429 Too Many Requests` зі списанням квоти лише після успішної відповіді AI).
 - **Перевірка:** unit-тести реєстрації, логіну, інвайтів, ролей та блокування `402` / `429`.
 
-#### [ ] План `#003b` (`[BE-Core]`): Реструктуризація `internal/core` на підпакети (без зміни поведінки)
+#### [x] План `#003b` (`[BE-Core]`): Реструктуризація `internal/core` на підпакети (без зміни поведінки) ([архів](./plans/archive/003b-be-core-restructure.md))
 - **Коли:** після закриття `#003` і **до** `#004`/`#005` (поки модулі не імпортують `core`).
 - **Мета:** замість 20+ файлів в одній папці — підпакети за відповідальністю (орієнтовно `config`, `logging`, `db`, `auth`, `workspace`, `httpx`, `apperr`), щоб зорієнтуватися в коді було легко, а `arch_test.go` міг забороняти небажані імпорти між ними.
 - **Умови:** жодних змін логіки; лише переміщення, імпорти та оновлення `arch_test.go`, `ARCHITECTURE_RULES.md`, `SPEC.md`; тести проходять до і після (`make check`); без циклічних імпортів.
@@ -84,7 +85,7 @@
 - **Перевірка:** unit-тести запису по днях, видалення старих файлів та відсутності секретів у логах (`make check`).
 
 #### [ ] План `#004` (`[BE-Core]`): Універсальний Клієнт Gemini AI, Опціональний Telegram-ядро та Контейнер `app.go`
-- **Файли:** `internal/core/ai.go`, `internal/core/bot.go`, `internal/core/app.go`, `internal/core/ai_test.go`.
+- **Файли:** `internal/core/ai/client.go`, `internal/core/bot/bot.go`, `internal/core/app/app.go`, `internal/core/ai/client_test.go`.
 - **Зміст:**
   - Клієнт Gemini API (`ai.go`): прийом тексту або аудіо, перевірка `MAX_AUDIO_SIZE_BYTES` та білого списку MIME-типів, захист від prompt injection (окремий `user` блок + суворий `responseSchema`), передача таймзони.
   - Опціональний Telegram-конектор (`bot.go`): безпечний старт без `TG_BOT_TOKEN`, обробка `/start link_<token>`.
@@ -157,7 +158,7 @@
 ### Частина В: Фінальна Збірка та Поле-Тест на iPhone
 
 #### [ ] План `#012` (`[Full-Stack]`): Вбудовування `//go:embed`, Скрипт HTTPS-тунелю та Фінальний E2E-аудит
-- **Файли:** `internal/core/static.go`, оновлення `cmd/app/main.go` та `Makefile`.
+- **Файли:** `internal/core/app/static.go`, оновлення `cmd/app/main.go` та `Makefile`.
 - **Зміст:**
   - Вбудовування зібраного `web/dist` у єдиний Go-бінарник із підтримкою SPA-роутингу та PWA service worker (PostgreSQL лишається окремим сервісом, бінарник підключається через `DATABASE_URL`).
   - Команда `make tunnel` для запуску захищеного HTTPS-тунелю для тестування мікрофона та спільного простору з двох iPhone.

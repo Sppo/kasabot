@@ -1,4 +1,4 @@
-package core
+package config
 
 import (
 	"bufio"
@@ -165,7 +165,7 @@ func LoadConfig(envFilePath string) (*Config, error) {
 	}
 
 	currency := strings.ToUpper(envString(dotEnv, "DEFAULT_CURRENCY", defaultCurrency))
-	if !isValidCurrencyCode(currency) {
+	if !IsValidCurrencyCode(currency) {
 		return nil, fmt.Errorf("invalid DEFAULT_CURRENCY %q: must be 3 uppercase Latin letters (A-Z)", currency)
 	}
 
@@ -227,8 +227,8 @@ func LoadConfig(envFilePath string) (*Config, error) {
 	}, nil
 }
 
-// isValidCurrencyCode перевіряє, що код валюти складається рівно з 3 латинських літер A-Z.
-func isValidCurrencyCode(code string) bool {
+// IsValidCurrencyCode перевіряє, що код валюти складається рівно з 3 латинських літер A-Z.
+func IsValidCurrencyCode(code string) bool {
 	if len(code) != 3 {
 		return false
 	}

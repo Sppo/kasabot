@@ -1,4 +1,4 @@
-package core
+package accounts
 
 import (
 	"context"
@@ -15,6 +15,11 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
+
+	"kasabot/internal/core/apperr"
+	"kasabot/internal/core/config"
+	"kasabot/internal/core/logging"
+	"kasabot/internal/core/module"
 )
 
 const (
@@ -58,9 +63,9 @@ type loginAttemptState struct {
 // AuthService відповідає за реєстрацію, логін, JWT, захист від підбору пароля та токени прив'язки Telegram.
 type AuthService struct {
 	store     CoreStore
-	cfg       *Config
-	registry  *ModuleRegistry
-	logger    *Logger
+	cfg       *config.Config
+	registry  *module.ModuleRegistry
+	logger    *logging.Logger
 	now       func() time.Time
 	dummyHash []byte
 
@@ -69,7 +74,7 @@ type AuthService struct {
 }
 
 // NewAuthService створює сервіс автентифікації.
-func NewAuthService(store CoreStore, cfg *Config, registry *ModuleRegistry, logger *Logger) (*AuthService, error) {
+func NewAuthService(store CoreStore, cfg *config.Config, registry *module.ModuleRegistry, logger *logging.Logger) (*AuthService, error) {
 	if store == nil || cfg == nil {
 		return nil, fmt.Errorf("auth service: store and config are required")
 	}
@@ -101,10 +106,10 @@ func (s *AuthService) Register(ctx context.Context, email, password, name, works
 
 	cleanName := strings.TrimSpace(name)
 	if cleanName == "" {
-		return AuthResult{}, NewAppError(http.StatusBadRequest, ErrValidation, "name is required", nil)
+		return AuthResult{}, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "name is required", nil)
 	}
 	if len([]rune(cleanName)) > maxNameLength {
-		return AuthResult{}, NewAppError(http.StatusBadRequest, ErrValidation, "name exceeds maximum length", nil)
+		return AuthResult{}, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "name exceeds maximum length", nil)
 	}
 
 	cleanWSName := strings.TrimSpace(workspaceName)
@@ -112,12 +117,12 @@ func (s *AuthService) Register(ctx context.Context, email, password, name, works
 		cleanWSName = cleanName
 	}
 	if len([]rune(cleanWSName)) > maxNameLength {
-		return AuthResult{}, NewAppError(http.StatusBadRequest, ErrValidation, "workspace_name exceeds maximum length", nil)
+		return AuthResult{}, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "workspace_name exceeds maximum length", nil)
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), s.cfg.BcryptCost)
 	if err != nil {
-		return AuthResult{}, NewAppError(http.StatusInternalServerError, ErrInternal, "failed to hash password", err)
+		return AuthResult{}, apperr.NewAppError(http.StatusInternalServerError, apperr.ErrInternal, "failed to hash password", err)
 	}
 
 	trialEndsAt := s.now().Add(time.Duration(s.cfg.TrialDays) * 24 * time.Hour)
@@ -132,14 +137,14 @@ func (s *AuthService) Register(ctx context.Context, email, password, name, works
 				// Компенсація: видаляємо воркспейс і користувача, щоб повторна реєстрація не дала ERR_EMAIL_TAKEN
 				compCtx, cancel := context.WithTimeout(context.Background(), compensationTimeout)
 				if compErr := s.store.DeleteUserAndWorkspace(compCtx, user.ID, ws.ID); compErr != nil && s.logger != nil {
-					s.logger.LogError(ctx, ErrInternal, "register_compensation_failed",
+					s.logger.LogError(ctx, apperr.ErrInternal, "register_compensation_failed",
 						slog.Int64("user_id", user.ID),
 						slog.Int64("workspace_id", ws.ID),
 						slog.String("error", compErr.Error()),
 					)
 				}
 				cancel()
-				return AuthResult{}, NewAppError(http.StatusInternalServerError, ErrInternal, "failed to initialize workspace modules", seedErr)
+				return AuthResult{}, apperr.NewAppError(http.StatusInternalServerError, apperr.ErrInternal, "failed to initialize workspace modules", seedErr)
 			}
 		}
 	}
@@ -147,7 +152,7 @@ func (s *AuthService) Register(ctx context.Context, email, password, name, works
 	ws.PlanStatus = EffectivePlanStatus(ws, s.now())
 	token, err := s.issueJWT(user.ID)
 	if err != nil {
-		return AuthResult{}, NewAppError(http.StatusInternalServerError, ErrInternal, "failed to issue token", err)
+		return AuthResult{}, apperr.NewAppError(http.StatusInternalServerError, apperr.ErrInternal, "failed to issue token", err)
 	}
 
 	if s.logger != nil {
@@ -168,17 +173,17 @@ func (s *AuthService) Register(ctx context.Context, email, password, name, works
 func (s *AuthService) Login(ctx context.Context, email, password, clientIP string) (AuthResult, error) {
 	normEmail, err := normalizeAndValidateEmail(email)
 	if err != nil {
-		return AuthResult{}, NewAppError(http.StatusUnauthorized, ErrInvalidCredentials, "invalid credentials", nil)
+		return AuthResult{}, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrInvalidCredentials, "invalid credentials", nil)
 	}
 
 	attemptKey := normEmail + "|" + strings.TrimSpace(clientIP)
 	if s.isLocked(attemptKey) {
-		return AuthResult{}, NewAppError(http.StatusTooManyRequests, ErrTooManyAttempts, "too many login attempts", nil)
+		return AuthResult{}, apperr.NewAppError(http.StatusTooManyRequests, apperr.ErrTooManyAttempts, "too many login attempts", nil)
 	}
 
 	if password == "" || len(password) > maxPasswordBytes {
 		s.recordFailure(attemptKey)
-		return AuthResult{}, NewAppError(http.StatusUnauthorized, ErrInvalidCredentials, "invalid credentials", nil)
+		return AuthResult{}, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrInvalidCredentials, "invalid credentials", nil)
 	}
 
 	user, err := s.store.FindUserByEmail(ctx, normEmail)
@@ -186,12 +191,12 @@ func (s *AuthService) Login(ctx context.Context, email, password, clientIP strin
 		// Фіктивне порівняння для вирівнювання часу відповіді
 		_ = bcrypt.CompareHashAndPassword(s.dummyHash, []byte(password))
 		s.recordFailure(attemptKey)
-		return AuthResult{}, NewAppError(http.StatusUnauthorized, ErrInvalidCredentials, "invalid credentials", nil)
+		return AuthResult{}, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrInvalidCredentials, "invalid credentials", nil)
 	}
 
 	if cmpErr := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); cmpErr != nil {
 		s.recordFailure(attemptKey)
-		return AuthResult{}, NewAppError(http.StatusUnauthorized, ErrInvalidCredentials, "invalid credentials", nil)
+		return AuthResult{}, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrInvalidCredentials, "invalid credentials", nil)
 	}
 
 	s.resetFailures(attemptKey)
@@ -207,7 +212,7 @@ func (s *AuthService) Login(ctx context.Context, email, password, clientIP strin
 
 	token, err := s.issueJWT(user.ID)
 	if err != nil {
-		return AuthResult{}, NewAppError(http.StatusInternalServerError, ErrInternal, "failed to issue token", err)
+		return AuthResult{}, apperr.NewAppError(http.StatusInternalServerError, apperr.ErrInternal, "failed to issue token", err)
 	}
 
 	if s.logger != nil {
@@ -249,7 +254,7 @@ func (s *AuthService) GetActiveWorkspaceID(ctx context.Context, userID int64) (i
 		return 0, err
 	}
 	if user.ActiveWorkspaceID == nil || *user.ActiveWorkspaceID <= 0 {
-		return 0, NewAppError(http.StatusBadRequest, ErrValidation, "active workspace is not set", nil)
+		return 0, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "active workspace is not set", nil)
 	}
 	return *user.ActiveWorkspaceID, nil
 }
@@ -258,7 +263,7 @@ func (s *AuthService) GetActiveWorkspaceID(ctx context.Context, userID int64) (i
 func (s *AuthService) CreateTelegramLink(ctx context.Context, userID int64) (TelegramLinkResult, error) {
 	token, err := generateSecureHex(tgLinkTokenNumBytes)
 	if err != nil {
-		return TelegramLinkResult{}, NewAppError(http.StatusInternalServerError, ErrInternal, "failed to generate telegram link token", err)
+		return TelegramLinkResult{}, apperr.NewAppError(http.StatusInternalServerError, apperr.ErrInternal, "failed to generate telegram link token", err)
 	}
 	expiresAt := s.now().Add(s.cfg.TGLinkTokenTTL)
 	if err := s.store.CreateTelegramLinkToken(ctx, userID, token, expiresAt); err != nil {
@@ -280,7 +285,7 @@ func (s *AuthService) CreateTelegramLink(ctx context.Context, userID int64) (Tel
 func (s *AuthService) ConsumeTelegramLinkToken(ctx context.Context, token string, telegramID int64) (int64, error) {
 	cleanToken := strings.TrimSpace(token)
 	if cleanToken == "" || telegramID <= 0 {
-		return 0, NewAppError(http.StatusBadRequest, ErrTelegramLinkExpired, "telegram link token is invalid or expired", nil)
+		return 0, apperr.NewAppError(http.StatusBadRequest, apperr.ErrTelegramLinkExpired, "telegram link token is invalid or expired", nil)
 	}
 	return s.store.ConsumeTelegramLinkToken(ctx, cleanToken, telegramID)
 }
@@ -299,11 +304,11 @@ func (s *AuthService) ParseToken(tokenString string) (int64, error) {
 		jwt.WithTimeFunc(s.now),
 	)
 	if err != nil || !parsed.Valid || claims.Subject == "" {
-		return 0, NewAppError(http.StatusUnauthorized, ErrUnauthorized, "invalid or expired token", nil)
+		return 0, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrUnauthorized, "invalid or expired token", nil)
 	}
 	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
 	if err != nil || userID <= 0 {
-		return 0, NewAppError(http.StatusUnauthorized, ErrUnauthorized, "invalid token subject", nil)
+		return 0, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrUnauthorized, "invalid token subject", nil)
 	}
 	return userID, nil
 }
@@ -413,24 +418,24 @@ func (s *AuthService) resetFailures(key string) {
 func normalizeAndValidateEmail(raw string) (string, error) {
 	norm := strings.ToLower(strings.TrimSpace(raw))
 	if norm == "" {
-		return "", NewAppError(http.StatusBadRequest, ErrValidation, "email is required", nil)
+		return "", apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "email is required", nil)
 	}
 	if len(norm) > maxEmailLength {
-		return "", NewAppError(http.StatusBadRequest, ErrValidation, "email exceeds maximum length", nil)
+		return "", apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "email exceeds maximum length", nil)
 	}
 	addr, err := mail.ParseAddress(norm)
 	if err != nil || addr.Address != norm || !strings.Contains(norm, ".") {
-		return "", NewAppError(http.StatusBadRequest, ErrValidation, "invalid email format", nil)
+		return "", apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "invalid email format", nil)
 	}
 	return norm, nil
 }
 
 func validatePassword(password string) error {
 	if len([]rune(password)) < minPasswordLength {
-		return NewAppError(http.StatusBadRequest, ErrValidation, "password must be at least 8 characters", nil)
+		return apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "password must be at least 8 characters", nil)
 	}
 	if len(password) > maxPasswordBytes {
-		return NewAppError(http.StatusBadRequest, ErrValidation, "password exceeds maximum length of 72 bytes", nil)
+		return apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "password exceeds maximum length of 72 bytes", nil)
 	}
 	return nil
 }

@@ -42,27 +42,32 @@ kasabot/
 │   └── app/
 │       └── main.go                 # Ініціалізація Core, міграції, реєстрація модулів, запуск HTTP і (опціонально) Bot
 ├── internal/
-│   ├── core/
-│   │   ├── app.go                  # Контейнер залежностей (DB, AI, Config, Auth, Registry)
-│   │   ├── config.go               # Єдина точка зчитування .env (PORT, DATABASE_URL, JWT_SECRET, BCRYPT_COST, LOGIN_*, MAX_WORKSPACES_PER_USER, TG_BOT_USERNAME тощо)
-│   │   ├── errors.go               # Єдиний реєстр констант кодів помилок (ERR_*) та AppError
-│   │   ├── httputil.go             # Спільні DRY-хелпери: WriteJSON, WriteError, WriteAppError, DecodeJSON, контекст (UserID, WorkspaceID, Role)
-│   │   ├── database.go             # Підключення до PostgreSQL (pgxpool), базові таблиці ядра та раннер міграцій
-│   │   ├── store.go                # Увесь SQL до системних таблиць ядра (CoreStore / PGStore)
-│   │   ├── auth.go                 # Сервіс: реєстрація/логін (Email+Password, bcrypt, JWT HS256, brute-force ліміт), токени Telegram
-│   │   ├── workspace.go            # Сервіс: воркспейси, інвайти партнерів, підписка (402) та квоти AI (429)
-│   │   ├── middleware.go           # Auth (JWT), Workspace (X-Workspace-ID / active_workspace_id), RequireOwner
-│   │   ├── auth_handler.go         # Тонкі HTTP-хендлери та роутер для /auth/* і /workspaces/*
-│   │   ├── ai.go                   # Універсальний клієнт Gemini API (текст + аудіо -> суворий JSON Schema)
-│   │   ├── bot.go                  # Опціональна ініціалізація Telegram-бота, прив'язка /start link_<code>, роутинг
-│   │   └── module.go               # Інтерфейс Module та реєстр модулів
+│   ├── core/                       # Ядро: кожен підпакет має одну відповідальність (напрямок залежностей — знизу вгору, без циклів)
+│   │   ├── apperr/errors.go        # Реєстр кодів помилок (ERR_*) та AppError                          (листок)
+│   │   ├── config/config.go        # Єдина точка зчитування .env (PORT, DATABASE_URL, JWT_SECRET, BCRYPT_COST, LOGIN_*, MAX_WORKSPACES_PER_USER, TG_BOT_USERNAME тощо) (листок)
+│   │   ├── reqctx/reqctx.go        # Ключі context: UserID, WorkspaceID, Role, RequestID               (листок)
+│   │   ├── module/module.go        # Інтерфейс Module, Migration та реєстр модулів                      (листок)
+│   │   ├── logging/logger.go       # slog-логер: файли по днях, error_id, request-логування middleware
+│   │   ├── httpx/httputil.go       # DRY-хелпери: WriteJSON, WriteError, WriteAppError, DecodeJSON
+│   │   ├── db/                     # Інфраструктура БД ядра
+│   │   │   └── database.go         #   pgxpool, системні таблиці ядра, раннер міграцій
+│   │   ├── accounts/               # Користувачі та воркспейси
+│   │   │   ├── store.go            #   SQL до таблиць ядра (CoreStore / PGStore), типи User, Workspace
+│   │   │   ├── auth.go             #   Сервіс: реєстрація/логін (bcrypt, JWT HS256, brute-force ліміт), токени Telegram
+│   │   │   ├── workspace.go        #   Сервіс: воркспейси, інвайти партнерів, підписка (402) та квоти AI (429)
+│   │   │   ├── middleware.go       #   Auth (JWT), Workspace (X-Workspace-ID / active_workspace_id), RequireOwner
+│   │   │   └── auth_handler.go     #   Тонкі HTTP-хендлери та роутер для /auth/* і /workspaces/*
+│   │   ├── testkit/                # Спільні тестові хелпери (імпортувати лише з _test.go)
+│   │   ├── ai/                     # (План #004) Клієнт Gemini API (текст + аудіо -> суворий JSON Schema)
+│   │   ├── bot/                    # (План #004) Опціональний Telegram-бот, прив'язка /start link_<code>, роутинг
+│   │   └── app/                    # (План #004) Контейнер залежностей (DB, AI, Config, Accounts, Registry), складання роутера
 │   └── modules/
 │       └── finance/                # Модуль №1: Облік доходів та витрат (Суворий 3-шаровий поділ)
-│           ├── module.go           # Реалізація core.Module (ініціалізація Repo -> Service -> Handlers)
+│           ├── module.go           # Реалізація module.Module (ініціалізація Repo -> Service -> Handlers)
 │           ├── model.go            # Структури даних, категорії та DTO
 │           ├── repository.go       # Шар 3 (БД): ТІЛЬКИ SQL-запити (fin_categories, fin_transactions) з workspace_id
-│           ├── service.go          # Шар 2 (Бізнес-логіка): НЕ знає про SQL/HTTP; працює через інтерфейс Repository та core.AI
-│           ├── service_test.go     # Unit-тести бізнес-логіки з мок-реалізацією Repository та core.AI
+│           ├── service.go          # Шар 2 (Бізнес-логіка): НЕ знає про SQL/HTTP; працює через інтерфейс Repository та ai.Client
+│           ├── service_test.go     # Unit-тести бізнес-логіки з мок-реалізацією Repository та ai.Client
 │           ├── http_handler.go     # Шар 1 (Тонкий контролер): парсинг HTTP -> виклик Service -> JSON-відповідь
 │           └── bot_handler.go      # Шар 1 (Тонкий контролер): прийом голосу/тексту в TG -> виклик Service -> відповідь-чек
 ├── web/                            # Mobile-First клієнтський додаток (Capacitor + PWA + Desktop Web)
@@ -152,7 +157,7 @@ kasabot/
   2. Бот перехоплює `/start link_<token>`, знаходить `user_id`, записує `telegram_id` користувачу і видаляє використаний токен.
   3. Якщо в бот пише неприв'язаний `telegram_id`, бот відповідає інструкцією зареєструватися в додатку.
 
-### 4.3. Інтерфейс модуля (`core.Module`)
+### 4.3. Інтерфейс модуля (`module.Module`, пакет `internal/core/module`)
 ```go
 type Migration struct {
     Version int
@@ -169,7 +174,7 @@ type Module interface {
 }
 ```
 
-### 4.4. AI-клієнт (`core.AI`)
+### 4.4. AI-клієнт (`ai.Client`, пакет `internal/core/ai`)
 - Приймає текстовий запит або аудіо-потік (`[]byte`, `mimeType`), системний промпт та `responseSchema` (JSON Schema).
 - Обмеження безпеки на аудіо: максимум **3 МБ** на один файл.
 - Завжди передає в системний промпт поточну дату/час (`Europe/Kyiv`), щоб AI коректно розпізнавав відносні дати (*«вчора»*, *«в суботу»*).

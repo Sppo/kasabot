@@ -1,4 +1,4 @@
-package core
+package logging
 
 import (
 	"context"
@@ -13,6 +13,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"kasabot/internal/core/apperr"
+	"kasabot/internal/core/config"
+	"kasabot/internal/core/reqctx"
 )
 
 const (
@@ -32,7 +36,7 @@ const (
 type ErrorEvent struct {
 	ErrorID     string
 	RequestID   string
-	ErrorCode   ErrorCode
+	ErrorCode   apperr.ErrorCode
 	Message     string
 	WorkspaceID int64
 	UserID      int64
@@ -79,7 +83,7 @@ func WithLoggerStdout(w io.Writer) LoggerOption {
 }
 
 // NewLogger створює структурований JSON-логер, який пише події в app-YYYY-MM-DD.log, помилки додатково в errors-YYYY-MM-DD.log та дублює в stdout.
-func NewLogger(cfg *Config, opts ...LoggerOption) (*Logger, error) {
+func NewLogger(cfg *config.Config, opts ...LoggerOption) (*Logger, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -187,11 +191,11 @@ func randomHex(numBytes int) string {
 }
 
 // LogError фіксує помилку рівня ERROR із коротким error_id, error_code та наявними в контексті ідентифікаторами і викликає ErrorHook.
-func (l *Logger) LogError(ctx context.Context, code ErrorCode, msg string, attrs ...slog.Attr) string {
+func (l *Logger) LogError(ctx context.Context, code apperr.ErrorCode, msg string, attrs ...slog.Attr) string {
 	errorID := NewErrorID()
-	reqID := RequestIDFromCtx(ctx)
-	wsID, hasWS := WorkspaceIDFromCtx(ctx)
-	userID, hasUser := UserIDFromCtx(ctx)
+	reqID := reqctx.RequestIDFromCtx(ctx)
+	wsID, hasWS := reqctx.WorkspaceIDFromCtx(ctx)
+	userID, hasUser := reqctx.UserIDFromCtx(ctx)
 
 	baseAttrs := make([]slog.Attr, 0, 5+len(attrs))
 	baseAttrs = append(baseAttrs,
@@ -239,7 +243,7 @@ func RequestLoggingMiddleware(logger *Logger) func(http.Handler) http.Handler {
 				reqID = newRequestID()
 			}
 
-			ctx := WithRequestID(r.Context(), reqID)
+			ctx := reqctx.WithRequestID(r.Context(), reqID)
 			w.Header().Set("X-Request-ID", reqID)
 
 			rw := &statusResponseWriter{ResponseWriter: w, status: http.StatusOK}
@@ -262,10 +266,10 @@ func RequestLoggingMiddleware(logger *Logger) func(http.Handler) http.Handler {
 				slog.Int("status", rw.status),
 				slog.Int64("duration_ms", durationMs),
 			)
-			if wsID, ok := WorkspaceIDFromCtx(ctx); ok {
+			if wsID, ok := reqctx.WorkspaceIDFromCtx(ctx); ok {
 				attrs = append(attrs, slog.Int64("workspace_id", wsID))
 			}
-			if userID, ok := UserIDFromCtx(ctx); ok {
+			if userID, ok := reqctx.UserIDFromCtx(ctx); ok {
 				attrs = append(attrs, slog.Int64("user_id", userID))
 			}
 

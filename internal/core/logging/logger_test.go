@@ -1,4 +1,4 @@
-package core
+package logging
 
 import (
 	"bytes"
@@ -12,11 +12,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"kasabot/internal/core/apperr"
+	"kasabot/internal/core/config"
+	"kasabot/internal/core/reqctx"
 )
 
-func newTestLoggerConfig(logDir string, retentionDays int) *Config {
+func newTestLoggerConfig(logDir string, retentionDays int) *config.Config {
 	loc, _ := time.LoadLocation("Europe/Kyiv")
-	return &Config{
+	return &config.Config{
 		LogDir:           logDir,
 		LogRetentionDays: retentionDays,
 		DefaultLocation:  loc,
@@ -45,9 +49,9 @@ func TestLoggerDailyFilesErrorIDAndHook(t *testing.T) {
 		hookedEvent = ev
 	})
 
-	ctx := WithRequestID(context.Background(), "req-abc-123")
-	ctx = WithWorkspaceID(ctx, 77)
-	ctx = WithUserID(ctx, 12)
+	ctx := reqctx.WithRequestID(context.Background(), "req-abc-123")
+	ctx = reqctx.WithWorkspaceID(ctx, 77)
+	ctx = reqctx.WithUserID(ctx, 12)
 
 	// Перевіряємо, що порожній errors-файл не створюється, доки не було першої помилки
 	logger.Slog().InfoContext(ctx, "normal_event", slog.String("action", "ping"))
@@ -55,13 +59,13 @@ func TestLoggerDailyFilesErrorIDAndHook(t *testing.T) {
 		t.Fatalf("expected errors log NOT to be created before first ERROR")
 	}
 
-	errID := logger.LogError(ctx, ErrInternal, "database failure")
+	errID := logger.LogError(ctx, apperr.ErrInternal, "database failure")
 
 	if len(errID) != 8 {
 		t.Fatalf("expected 8-char hex error_id, got %q", errID)
 	}
-	if !hookCalled || hookedEvent.ErrorID != errID || hookedEvent.ErrorCode != ErrInternal {
-		t.Fatalf("expected ErrorHook to be called with error_id=%q and code=%q, got %+v", errID, ErrInternal, hookedEvent)
+	if !hookCalled || hookedEvent.ErrorID != errID || hookedEvent.ErrorCode != apperr.ErrInternal {
+		t.Fatalf("expected ErrorHook to be called with error_id=%q and code=%q, got %+v", errID, apperr.ErrInternal, hookedEvent)
 	}
 
 	appLogBytes, err := os.ReadFile(filepath.Join(logDir, "app-2026-11-20.log"))
@@ -82,7 +86,7 @@ func TestLoggerDailyFilesErrorIDAndHook(t *testing.T) {
 	if strings.Contains(errLog, "normal_event") {
 		t.Errorf("expected errors log NOT to contain INFO normal_event, got:\n%s", errLog)
 	}
-	if !strings.Contains(errLog, errID) || !strings.Contains(errLog, "req-abc-123") || !strings.Contains(errLog, string(ErrInternal)) {
+	if !strings.Contains(errLog, errID) || !strings.Contains(errLog, "req-abc-123") || !strings.Contains(errLog, string(apperr.ErrInternal)) {
 		t.Errorf("expected errors log to contain error_id, request_id and error_code, got:\n%s", errLog)
 	}
 	if !strings.Contains(stdoutBuf.String(), errID) {
@@ -231,11 +235,17 @@ func TestRequestLoggingMiddlewareNoSecretsAndCapturesRequestID(t *testing.T) {
 
 	mw := RequestLoggingMiddleware(logger)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := WithUserID(r.Context(), 5)
-		ctx = WithWorkspaceID(ctx, 10)
+		ctx := reqctx.WithUserID(r.Context(), 5)
+		ctx = reqctx.WithWorkspaceID(ctx, 10)
 		// Імітуємо помилку сервера з error_id у JSON-відповіді
-		errID := logger.LogError(ctx, ErrInternal, "failed_op")
-		WriteErrorWithID(w, http.StatusInternalServerError, ErrInternal, "internal error", errID)
+		errID := logger.LogError(ctx, apperr.ErrInternal, "failed_op")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error_code": string(apperr.ErrInternal),
+			"error_id":   errID,
+			"message":    "internal error",
+		})
 	}))
 
 	reqBody := `{"password":"super-secret-password-123"}`
@@ -253,11 +263,15 @@ func TestRequestLoggingMiddlewareNoSecretsAndCapturesRequestID(t *testing.T) {
 		t.Fatal("expected X-Request-ID header in response")
 	}
 
-	var errResp ErrorResponse
+	var errResp struct {
+		ErrorCode apperr.ErrorCode `json:"error_code"`
+		ErrorID   string           `json:"error_id"`
+		Message   string           `json:"message"`
+	}
 	if err := json.NewDecoder(rec.Body).Decode(&errResp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if errResp.ErrorID == "" || errResp.ErrorCode != ErrInternal {
+	if errResp.ErrorID == "" || errResp.ErrorCode != apperr.ErrInternal {
 		t.Fatalf("expected error_id and error_code in JSON response, got %+v", errResp)
 	}
 

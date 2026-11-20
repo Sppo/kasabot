@@ -13,7 +13,7 @@ This file defines non-negotiable architectural, security, and data invariants fo
 2. **Core Independence (`NEVER` import modules into core):**
    - `internal/core` **MUST NEVER** import anything from `internal/modules/*`.
    - Dependencies flow strictly one way: `cmd/app` -> `internal/modules/*` -> `internal/core`.
-   - Inside `internal/core`, SQL/pgx is isolated in `store.go` and `database.go`; `auth.go`, `workspace.go`, and `middleware.go` **MUST NEVER** import `pgx` or `database/sql`.
+   - Inside `internal/core`, SQL/pgx is isolated in `internal/core/db/database.go` and `internal/core/accounts/store.go`; the rest of `internal/core/accounts/*` (`auth.go`, `workspace.go`, `middleware.go`, `auth_handler.go`) **MUST NEVER** import `pgx` or `database/sql`.
 
 3. **Strict 3-Layer Module Separation (`Handler -> Service -> Repository`):**
    - **Handlers (`http_handler.go`, `bot_handler.go`):** **MUST NEVER** import `"database/sql"` or `github.com/jackc/pgx/*`, or access `Repository` directly. Handlers **ONLY** parse input, call `service.go`, and return JSON/Telegram responses. Zero SQL or business math inside handlers.
@@ -26,15 +26,15 @@ This file defines non-negotiable architectural, security, and data invariants fo
    - **Migrations:** Tracked in `schema_migrations (module TEXT, version INTEGER, applied_at TIMESTAMPTZ, PRIMARY KEY(module, version))`. Migrations are strictly forward-only, sequential, and wrapped in transactions (PostgreSQL supports transactional DDL); the runner **MUST** take a `pg_advisory_lock` so concurrent starts do not apply the same migration twice. **NEVER** edit an already-applied migration; create a new version instead.
 
 5. **Operational Config (`.env`) vs. Domain Constants (Code):**
-   - **Single Config Entrypoint:** **NEVER** call `os.Getenv` outside `internal/core/config.go`.
+   - **Single Config Entrypoint:** **NEVER** call `os.Getenv` outside `internal/core/config/config.go`.
    - **What goes into `.env` / `.env.example` (Operational Config):** ports, database connection (`DATABASE_URL`) and pool size (`DB_MAX_CONNS`), timeouts (`AI_REQUEST_TIMEOUT_SEC`, `HTTP_TIMEOUT_SEC`, `DB_CONNECT_TIMEOUT_SEC`), byte limits (`MAX_AUDIO_SIZE_BYTES`), quotas/TTLs (`TRIAL_DAYS`, `TRIAL_DAILY_AI_LIMIT`, `ACTIVE_DAILY_AI_LIMIT`, `JWT_TTL_HOURS`), AI model name (`GEMINI_MODEL`), default timezone and currency. Every `.env.example` variable **MUST** have a Ukrainian comment with units and defaults.
-   - **What stays in Code (Domain Constants):** error codes (`ERR_*` in `internal/core/errors.go`), table names, role names (`owner`, `member`), transaction types (`expense`, `income`), and system category keys (`groceries`, `fuel`, etc.) are typed Go/TS constants — **NEVER** put domain constants into `.env`.
+   - **What stays in Code (Domain Constants):** error codes (`ERR_*` in `internal/core/apperr/errors.go`), table names, role names (`owner`, `member`), transaction types (`expense`, `income`), and system category keys (`groceries`, `fuel`, etc.) are typed Go/TS constants — **NEVER** put domain constants into `.env`.
 
 6. **Money, Errors, Logging & DRY:**
    - **Money:** **NEVER** use `FLOAT` / `REAL` / `float64` for storing money in the database. Always store integer minor units (`amount_minor BIGINT`, e.g., kopiykas).
-   - **Errors (`internal/core/errors.go`):** Wrap internal errors with `fmt.Errorf("context: %w", err)`. Map all client-facing errors to constants in `internal/core/errors.go` (`ERR_*`), mirrored 1:1 in `uk.ts` and `en.ts`.
+   - **Errors (`internal/core/apperr/errors.go`):** Wrap internal errors with `fmt.Errorf("context: %w", err)`. Map all client-facing errors to constants in `internal/core/apperr/errors.go` (`ERR_*`), mirrored 1:1 in `uk.ts` and `en.ts`.
    - **Logging (`log/slog`):** Use standard `log/slog` (`workspace_id`, `user_id`, duration, `error_code`). **NEVER** use `fmt.Println` or log passwords, JWT tokens, API keys, or raw audio bytes.
-   - **DRY Helpers:** Reuse `WriteJSON`, `WriteError`, `DecodeJSON`, `UserIDFromCtx`, `WorkspaceIDFromCtx` from `internal/core/httputil.go`. `http_handler.go` and `bot_handler.go` **MUST** call the exact same `Service` methods.
+   - **DRY Helpers:** Reuse `WriteJSON`, `WriteError`, `DecodeJSON` from `internal/core/httpx` and `UserIDFromCtx`, `WorkspaceIDFromCtx` from `internal/core/reqctx`. `http_handler.go` and `bot_handler.go` **MUST** call the exact same `Service` methods.
 
 ---
 
@@ -76,6 +76,6 @@ This file defines non-negotiable architectural, security, and data invariants fo
 1. **`arch_test.go` (Go + React AST/Source Scanner):**
    - Fails if `internal/core` imports `internal/modules/*` or `modules/<A>` imports `modules/<B>`.
    - Fails if `service.go` or `*_handler.go` imports `"database/sql"` or `github.com/jackc/pgx/*` (or `service.go` imports `"net/http"` / `"gopkg.in/telebot.v3"`).
-   - Fails if `os.Getenv` is used outside `internal/core/config.go` or `import.meta.env` outside `web/src/core/config.ts`.
+   - Fails if `os.Getenv` is used outside `internal/core/config/config.go` or `import.meta.env` outside `web/src/core/config.ts`.
    - Fails if `web/src/modules/<A>` imports `web/src/modules/<B>` or `components/*.tsx` calls `fetch(` / `indexedDB`.
-2. **Unit Tests (`service_test.go`):** New business logic in `service.go` **MUST** be covered by table-driven unit tests using a mock `Repository` and mock `core.AI`.
+2. **Unit Tests (`service_test.go`):** New business logic in `service.go` **MUST** be covered by table-driven unit tests using a mock `Repository` and mock `ai.Client`.

@@ -1,4 +1,4 @@
-package core
+package accounts
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"kasabot/internal/core/apperr"
 )
 
 // Ролі учасників воркспейсу та статуси підписки (доменні константи).
@@ -103,7 +105,7 @@ func (s *PGStore) CreateUserWithWorkspace(ctx context.Context, email, passwordHa
 	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.TelegramID, &u.ActiveWorkspaceID, &u.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return User{}, Workspace{}, NewAppError(http.StatusConflict, ErrEmailTaken, "email already registered", nil)
+			return User{}, Workspace{}, apperr.NewAppError(http.StatusConflict, apperr.ErrEmailTaken, "email already registered", nil)
 		}
 		return User{}, Workspace{}, fmt.Errorf("insert user: %w", err)
 	}
@@ -167,7 +169,7 @@ func (s *PGStore) FindUserByEmail(ctx context.Context, email string) (User, erro
 	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.TelegramID, &u.ActiveWorkspaceID, &u.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return User{}, NewAppError(http.StatusNotFound, ErrNotFound, "user not found", nil)
+			return User{}, apperr.NewAppError(http.StatusNotFound, apperr.ErrNotFound, "user not found", nil)
 		}
 		return User{}, fmt.Errorf("find user by email: %w", err)
 	}
@@ -183,7 +185,7 @@ func (s *PGStore) FindUserByID(ctx context.Context, userID int64) (User, error) 
 	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.TelegramID, &u.ActiveWorkspaceID, &u.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return User{}, NewAppError(http.StatusNotFound, ErrNotFound, "user not found", nil)
+			return User{}, apperr.NewAppError(http.StatusNotFound, apperr.ErrNotFound, "user not found", nil)
 		}
 		return User{}, fmt.Errorf("find user by id: %w", err)
 	}
@@ -201,7 +203,7 @@ func (s *PGStore) CreateWorkspace(ctx context.Context, ownerID int64, name, curr
 	var lockedID int64
 	if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = $1 FOR UPDATE`, ownerID).Scan(&lockedID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Workspace{}, NewAppError(http.StatusNotFound, ErrNotFound, "user not found", nil)
+			return Workspace{}, apperr.NewAppError(http.StatusNotFound, apperr.ErrNotFound, "user not found", nil)
 		}
 		return Workspace{}, fmt.Errorf("lock user for workspace limit: %w", err)
 	}
@@ -211,7 +213,7 @@ func (s *PGStore) CreateWorkspace(ctx context.Context, ownerID int64, name, curr
 		return Workspace{}, fmt.Errorf("count owned workspaces: %w", err)
 	}
 	if count >= maxWorkspaces {
-		return Workspace{}, NewAppError(http.StatusForbidden, ErrForbidden, "workspace limit reached", nil)
+		return Workspace{}, apperr.NewAppError(http.StatusForbidden, apperr.ErrForbidden, "workspace limit reached", nil)
 	}
 
 	var ws Workspace
@@ -248,7 +250,7 @@ func (s *PGStore) SetActiveWorkspace(ctx context.Context, userID, workspaceID in
 		return fmt.Errorf("set active workspace: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return NewAppError(http.StatusNotFound, ErrNotFound, "user not found", nil)
+		return apperr.NewAppError(http.StatusNotFound, apperr.ErrNotFound, "user not found", nil)
 	}
 	return nil
 }
@@ -300,7 +302,7 @@ func (s *PGStore) GetMembership(ctx context.Context, workspaceID, userID int64) 
 	).Scan(&role)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", NewAppError(http.StatusForbidden, ErrForbidden, "access to workspace denied", nil)
+			return "", apperr.NewAppError(http.StatusForbidden, apperr.ErrForbidden, "access to workspace denied", nil)
 		}
 		return "", fmt.Errorf("get membership: %w", err)
 	}
@@ -332,7 +334,7 @@ func (s *PGStore) JoinWorkspaceByInvite(ctx context.Context, userID int64, code 
 	).Scan(&workspaceID, &expiresAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Workspace{}, NewAppError(http.StatusBadRequest, ErrInviteInvalidOrExpired, "invite code is invalid or expired", nil)
+			return Workspace{}, apperr.NewAppError(http.StatusBadRequest, apperr.ErrInviteInvalidOrExpired, "invite code is invalid or expired", nil)
 		}
 		return Workspace{}, fmt.Errorf("find workspace invite: %w", err)
 	}
@@ -344,7 +346,7 @@ func (s *PGStore) JoinWorkspaceByInvite(ctx context.Context, userID int64, code 
 	if !expiresAt.After(time.Now()) {
 		// Комітимо видалення простроченого інвайту і повертаємо помилку
 		_ = tx.Commit(ctx)
-		return Workspace{}, NewAppError(http.StatusBadRequest, ErrInviteInvalidOrExpired, "invite code is invalid or expired", nil)
+		return Workspace{}, apperr.NewAppError(http.StatusBadRequest, apperr.ErrInviteInvalidOrExpired, "invite code is invalid or expired", nil)
 	}
 
 	if _, err := tx.Exec(ctx,
@@ -407,7 +409,7 @@ func (s *PGStore) ConsumeTelegramLinkToken(ctx context.Context, token string, te
 	).Scan(&userID, &expiresAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, NewAppError(http.StatusBadRequest, ErrTelegramLinkExpired, "telegram link token is invalid or expired", nil)
+			return 0, apperr.NewAppError(http.StatusBadRequest, apperr.ErrTelegramLinkExpired, "telegram link token is invalid or expired", nil)
 		}
 		return 0, fmt.Errorf("find telegram link token: %w", err)
 	}
@@ -418,7 +420,7 @@ func (s *PGStore) ConsumeTelegramLinkToken(ctx context.Context, token string, te
 
 	if !expiresAt.After(time.Now()) {
 		_ = tx.Commit(ctx)
-		return 0, NewAppError(http.StatusBadRequest, ErrTelegramLinkExpired, "telegram link token is invalid or expired", nil)
+		return 0, apperr.NewAppError(http.StatusBadRequest, apperr.ErrTelegramLinkExpired, "telegram link token is invalid or expired", nil)
 	}
 
 	if _, err := tx.Exec(ctx,
@@ -426,7 +428,7 @@ func (s *PGStore) ConsumeTelegramLinkToken(ctx context.Context, token string, te
 		telegramID, userID,
 	); err != nil {
 		if isUniqueViolation(err) {
-			return 0, NewAppError(http.StatusConflict, ErrValidation, "telegram account is already linked to another user", nil)
+			return 0, apperr.NewAppError(http.StatusConflict, apperr.ErrValidation, "telegram account is already linked to another user", nil)
 		}
 		return 0, fmt.Errorf("link telegram_id: %w", err)
 	}
@@ -446,7 +448,7 @@ func (s *PGStore) GetWorkspaceQuotaState(ctx context.Context, workspaceID int64)
 	).Scan(&ws.ID, &ws.Name, &ws.Currency, &ws.OwnerID, &ws.PlanStatus, &ws.SubscriptionEndsAt, &ws.AIRequestsToday, &ws.AIRequestsDate, &ws.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Workspace{}, NewAppError(http.StatusNotFound, ErrNotFound, "workspace not found", nil)
+			return Workspace{}, apperr.NewAppError(http.StatusNotFound, apperr.ErrNotFound, "workspace not found", nil)
 		}
 		return Workspace{}, fmt.Errorf("get workspace quota state: %w", err)
 	}
@@ -466,7 +468,7 @@ func (s *PGStore) IncrementAIRequestsToday(ctx context.Context, workspaceID int6
 		return fmt.Errorf("increment ai_requests_today: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return NewAppError(http.StatusNotFound, ErrNotFound, "workspace not found", nil)
+		return apperr.NewAppError(http.StatusNotFound, apperr.ErrNotFound, "workspace not found", nil)
 	}
 	return nil
 }

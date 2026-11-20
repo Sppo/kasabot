@@ -108,16 +108,28 @@ func checkGoArchitecture(rootDir string) []string {
 
 		// 1. Core Independence & Core Layering:
 		// internal/core НІКОЛИ не імпортує internal/modules/*;
-		// auth.go, workspace.go, middleware.go не імпортують pgx/database/sql (SQL лише в store.go/database.go).
+		// internal/core/accounts/* (крім store.go) не імпортують pgx/database/sql (SQL лише в db/database.go та accounts/store.go).
+		// Підпакети core утворюють строгий DAG без циклів і небажаних залежностей.
 		if strings.HasPrefix(relPath, "internal/core/") {
-			isCoreServiceOrMW := fileName == "auth.go" || fileName == "workspace.go" || fileName == "middleware.go"
+			isCoreServiceOrMW := (strings.HasPrefix(relPath, "internal/core/accounts/") && fileName != "store.go") ||
+				fileName == "auth.go" || fileName == "workspace.go" || fileName == "middleware.go" || fileName == "auth_handler.go"
+			coreSubpkg := ""
+			if parts := strings.Split(relPath, "/"); len(parts) >= 4 {
+				coreSubpkg = parts[2]
+			}
 			for _, imp := range fullAST.Imports {
 				impPath := strings.Trim(imp.Path.Value, `"`)
 				if strings.Contains(impPath, "internal/modules") {
 					violations = append(violations, "[CORE->MODULE] "+relPath+": internal/core MUST NEVER import module package "+impPath)
 				}
 				if isCoreServiceOrMW && isSQLPackage(impPath) {
-					violations = append(violations, "[CORE-LAYER] "+relPath+": core business/middleware MUST NOT import SQL package "+impPath+" (SQL only in store.go/database.go)")
+					violations = append(violations, "[CORE-LAYER] "+relPath+": core business/middleware MUST NOT import SQL package "+impPath+" (SQL only in internal/core/db/database.go and internal/core/accounts/store.go)")
+				}
+				if idx := strings.Index(impPath, "internal/core/"); idx != -1 {
+					targetSubpkg := strings.Split(impPath[idx+len("internal/core/"):], "/")[0]
+					if !isAllowedCoreEdge(coreSubpkg, targetSubpkg) {
+						violations = append(violations, "[CORE-DAG] "+relPath+": core subpackage "+coreSubpkg+" MUST NOT import "+targetSubpkg)
+					}
 				}
 			}
 		}
@@ -209,9 +221,9 @@ func checkGoArchitecture(rootDir string) []string {
 				if !ok {
 					return true
 				}
-				if relPath != "internal/core/config.go" {
+				if relPath != "internal/core/config/config.go" {
 					if origPkg, isAlias := envPkgAliases[pkgIdent.Name]; isAlias && forbiddenEnvFuncs[node.Sel.Name] {
-						violations = append(violations, "[ENV-OUTSIDE-CONFIG] "+relPath+": "+origPkg+"."+node.Sel.Name+" is forbidden outside internal/core/config.go")
+						violations = append(violations, "[ENV-OUTSIDE-CONFIG] "+relPath+": "+origPkg+"."+node.Sel.Name+" is forbidden outside internal/core/config/config.go")
 					}
 				}
 				if fmtPkgAliases[pkgIdent.Name] && forbiddenFmtFuncs[node.Sel.Name] {
@@ -219,8 +231,8 @@ func checkGoArchitecture(rootDir string) []string {
 				}
 
 			case *ast.Ident:
-				if relPath != "internal/core/config.go" && hasDotEnvPkg && forbiddenEnvFuncs[node.Name] {
-					violations = append(violations, "[ENV-OUTSIDE-CONFIG] "+relPath+": dot-imported "+node.Name+" is forbidden outside internal/core/config.go")
+				if relPath != "internal/core/config/config.go" && hasDotEnvPkg && forbiddenEnvFuncs[node.Name] {
+					violations = append(violations, "[ENV-OUTSIDE-CONFIG] "+relPath+": dot-imported "+node.Name+" is forbidden outside internal/core/config/config.go")
 				}
 				if hasDotFmtPkg && forbiddenFmtFuncs[node.Name] {
 					violations = append(violations, "[FMT-PRINT] "+relPath+": dot-imported "+node.Name+" is forbidden in production code (use log/slog)")
@@ -242,8 +254,8 @@ func checkGoArchitecture(rootDir string) []string {
 					if err != nil {
 						return true
 					}
-					if relPath != "internal/core/errors.go" && strings.HasPrefix(val, "ERR_") {
-						violations = append(violations, "[ADHOC-ERR-CODE] "+relPath+": error code literal "+val+" must be defined only in internal/core/errors.go")
+					if relPath != "internal/core/apperr/errors.go" && strings.HasPrefix(val, "ERR_") {
+						violations = append(violations, "[ADHOC-ERR-CODE] "+relPath+": error code literal "+val+" must be defined only in internal/core/apperr/errors.go")
 					}
 					if selectStarRe.MatchString(val) {
 						violations = append(violations, "[SQL-SELECT-STAR] "+relPath+": SELECT * is forbidden (list columns explicitly)")
@@ -263,6 +275,28 @@ func checkGoArchitecture(rootDir string) []string {
 		violations = append(violations, "walk error: "+walkErr.Error())
 	}
 	return violations
+}
+
+func isAllowedCoreEdge(from, to string) bool {
+	if from == "" || from == to {
+		return true
+	}
+	allowed := map[string]map[string]bool{
+		"apperr":   {},
+		"config":   {},
+		"reqctx":   {},
+		"module":   {},
+		"logging":  {"apperr": true, "config": true, "reqctx": true},
+		"httpx":    {"apperr": true, "logging": true, "reqctx": true},
+		"db":       {"apperr": true, "config": true, "logging": true, "module": true},
+		"accounts": {"apperr": true, "config": true, "httpx": true, "logging": true, "module": true, "reqctx": true},
+		"testkit":  {"apperr": true, "config": true, "db": true, "logging": true},
+	}
+	targets, known := allowed[from]
+	if !known {
+		return true
+	}
+	return targets[to]
 }
 
 func isSQLPackage(impPath string) bool {
@@ -694,10 +728,22 @@ func TestArchitectureValidatorCatchesViolations(t *testing.T) {
 				expectToken: "[CORE->MODULE]",
 			},
 			{
-				name:        "core auth.go imports pgx",
-				relFile:     "internal/core/auth.go",
-				code:        `package core; import _ "github.com/jackc/pgx/v5/pgxpool"`,
+				name:        "core accounts/auth.go imports pgx",
+				relFile:     "internal/core/accounts/auth.go",
+				code:        `package accounts; import _ "github.com/jackc/pgx/v5/pgxpool"`,
 				expectToken: "[CORE-LAYER]",
+			},
+			{
+				name:        "core accounts/store.go imports pgx is allowed",
+				relFile:     "internal/core/accounts/store.go",
+				code:        `package accounts; import _ "github.com/jackc/pgx/v5/pgxpool"`,
+				expectToken: "",
+			},
+			{
+				name:        "core apperr imports config",
+				relFile:     "internal/core/apperr/bad.go",
+				code:        `package apperr; import _ "kasabot/internal/core/config"`,
+				expectToken: "[CORE-DAG]",
 			},
 			{
 				name:        "module A imports module B",

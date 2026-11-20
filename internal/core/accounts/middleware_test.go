@@ -1,4 +1,4 @@
-package core
+package accounts
 
 import (
 	"context"
@@ -8,14 +8,19 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"kasabot/internal/core/httpx"
+	"kasabot/internal/core/module"
+	"kasabot/internal/core/reqctx"
+	"kasabot/internal/core/testkit"
 )
 
 func TestAuthAndWorkspaceMiddleware(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir())
 	store := NewPGStore(pool)
-	auth, _ := NewAuthService(store, cfg, NewModuleRegistry(), nil)
-	wsSvc := NewWorkspaceService(store, cfg, NewModuleRegistry(), nil)
+	auth, _ := NewAuthService(store, cfg, module.NewModuleRegistry(), nil)
+	wsSvc := NewWorkspaceService(store, cfg, module.NewModuleRegistry(), nil)
 	ctx := context.Background()
 
 	owner, _ := auth.Register(ctx, "mw_owner@example.com", "StrongPass123", "Owner", "WS1")
@@ -28,10 +33,10 @@ func TestAuthAndWorkspaceMiddleware(t *testing.T) {
 	protected := AuthMiddleware(auth, nil)(
 		WorkspaceMiddleware(auth, wsSvc, nil)(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				wsID, _ := WorkspaceIDFromCtx(r.Context())
-				WriteJSON(w, http.StatusOK, map[string]any{
+				wsID, _ := reqctx.WorkspaceIDFromCtx(r.Context())
+				httpx.WriteJSON(w, http.StatusOK, map[string]any{
 					"workspace_id": wsID,
-					"role":         WorkspaceRoleFromCtx(r.Context()),
+					"role":         reqctx.WorkspaceRoleFromCtx(r.Context()),
 				})
 			}),
 		),
@@ -92,11 +97,11 @@ func TestAuthAndWorkspaceMiddleware(t *testing.T) {
 }
 
 func TestAuthHandlerEndToEnd(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir())
 	store := NewPGStore(pool)
-	auth, _ := NewAuthService(store, cfg, NewModuleRegistry(), nil)
-	wsSvc := NewWorkspaceService(store, cfg, NewModuleRegistry(), nil)
+	auth, _ := NewAuthService(store, cfg, module.NewModuleRegistry(), nil)
+	wsSvc := NewWorkspaceService(store, cfg, module.NewModuleRegistry(), nil)
 	router := NewAuthHandler(auth, wsSvc, cfg, nil).Routes()
 
 	// 1. Register

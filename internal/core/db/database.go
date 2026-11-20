@@ -1,4 +1,4 @@
-package core
+package db
 
 import (
 	"context"
@@ -8,6 +8,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"kasabot/internal/core/apperr"
+	"kasabot/internal/core/config"
+	"kasabot/internal/core/logging"
+	"kasabot/internal/core/module"
 )
 
 const (
@@ -17,7 +22,7 @@ const (
 )
 
 // OpenDB створює пул з'єднань pgxpool, перевіряє доступність PostgreSQL через Ping та ініціалізує системну схему ядра.
-func OpenDB(ctx context.Context, cfg *Config, logger *Logger) (*pgxpool.Pool, error) {
+func OpenDB(ctx context.Context, cfg *config.Config, logger *logging.Logger) (*pgxpool.Pool, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("open db: config is nil")
 	}
@@ -42,15 +47,15 @@ func OpenDB(ctx context.Context, cfg *Config, logger *Logger) (*pgxpool.Pool, er
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
 		if logger != nil {
-			logger.LogError(ctx, ErrInternal, "postgres_ping_failed", slog.String("error", err.Error()))
+			logger.LogError(ctx, apperr.ErrInternal, "postgres_ping_failed", slog.String("error", err.Error()))
 		}
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	if err := initCoreSchema(ctx, pool); err != nil {
+	if err := InitCoreSchema(ctx, pool); err != nil {
 		pool.Close()
 		if logger != nil {
-			logger.LogError(ctx, ErrInternal, "init_core_schema_failed", slog.String("error", err.Error()))
+			logger.LogError(ctx, apperr.ErrInternal, "init_core_schema_failed", slog.String("error", err.Error()))
 		}
 		return nil, fmt.Errorf("init core schema: %w", err)
 	}
@@ -93,8 +98,8 @@ func withAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, lockID int64, fn 
 	return fn(conn)
 }
 
-// initCoreSchema створює системні таблиці ядра за SPEC.md під advisory-блокуванням.
-func initCoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
+// InitCoreSchema створює системні таблиці ядра за SPEC.md під advisory-блокуванням.
+func InitCoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	const coreSchemaSQL = `
 CREATE TABLE IF NOT EXISTS users (
 	id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -155,7 +160,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 }
 
 // RunModuleMigrations накатує нові міграції модулів у транзакціях із захистом pg_advisory_lock.
-func RunModuleMigrations(ctx context.Context, pool *pgxpool.Pool, modules []Module, logger *Logger) error {
+func RunModuleMigrations(ctx context.Context, pool *pgxpool.Pool, modules []module.Module, logger *logging.Logger) error {
 	return withAdvisoryLock(ctx, pool, migrationsAdvisoryLockID, func(conn *pgxpool.Conn) error {
 		for _, mod := range modules {
 			if err := applyModuleMigrations(ctx, conn, mod, logger); err != nil {
@@ -166,9 +171,9 @@ func RunModuleMigrations(ctx context.Context, pool *pgxpool.Pool, modules []Modu
 	})
 }
 
-func applyModuleMigrations(ctx context.Context, conn *pgxpool.Conn, mod Module, logger *Logger) error {
+func applyModuleMigrations(ctx context.Context, conn *pgxpool.Conn, mod module.Module, logger *logging.Logger) error {
 	modName := mod.Name()
-	migs := append([]Migration(nil), mod.Migrations()...)
+	migs := append([]module.Migration(nil), mod.Migrations()...)
 	if len(migs) == 0 {
 		return nil
 	}

@@ -1,4 +1,4 @@
-package core
+package accounts
 
 import (
 	"bytes"
@@ -13,12 +13,18 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	"gopkg.in/telebot.v3"
+
+	"kasabot/internal/core/apperr"
+	"kasabot/internal/core/config"
+	"kasabot/internal/core/logging"
+	"kasabot/internal/core/module"
+	"kasabot/internal/core/testkit"
 )
 
-func newAuthTestConfig(t *testing.T, logDir string) *Config {
+func newAuthTestConfig(t *testing.T, logDir string) *config.Config {
 	t.Helper()
 	loc, _ := time.LoadLocation("Europe/Kyiv")
-	return &Config{
+	return &config.Config{
 		Port:                 8080,
 		DBMaxConns:           5,
 		DBConnectTimeout:     5 * time.Second,
@@ -49,10 +55,10 @@ type seedFailModule struct {
 	fail bool
 }
 
-func (m *seedFailModule) Name() string                { return m.name }
-func (m *seedFailModule) Migrations() []Migration     { return nil }
-func (m *seedFailModule) RegisterRoutes(_ chi.Router) {}
-func (m *seedFailModule) RegisterBot(_ *telebot.Bot)  {}
+func (m *seedFailModule) Name() string                   { return m.name }
+func (m *seedFailModule) Migrations() []module.Migration { return nil }
+func (m *seedFailModule) RegisterRoutes(_ chi.Router)    {}
+func (m *seedFailModule) RegisterBot(_ *telebot.Bot)     {}
 func (m *seedFailModule) OnWorkspaceCreated(_ context.Context, _ int64) error {
 	if m.fail {
 		return errors.New("seed boom")
@@ -60,14 +66,14 @@ func (m *seedFailModule) OnWorkspaceCreated(_ context.Context, _ int64) error {
 	return nil
 }
 
-func assertAppErrorCode(t *testing.T, err error, wantStatus int, wantCode ErrorCode) {
+func assertAppErrorCode(t *testing.T, err error, wantStatus int, wantCode apperr.ErrorCode) {
 	t.Helper()
 	if err == nil {
 		t.Fatalf("expected error %s (%d), got nil", wantCode, wantStatus)
 	}
-	var appErr *AppError
+	var appErr *apperr.AppError
 	if !errors.As(err, &appErr) {
-		t.Fatalf("expected *AppError, got %T: %v", err, err)
+		t.Fatalf("expected *apperr.AppError, got %T: %v", err, err)
 	}
 	if appErr.Status != wantStatus || appErr.Code != wantCode {
 		t.Fatalf("expected status=%d code=%s, got status=%d code=%s (%v)", wantStatus, wantCode, appErr.Status, appErr.Code, err)
@@ -75,10 +81,10 @@ func assertAppErrorCode(t *testing.T, err error, wantStatus int, wantCode ErrorC
 }
 
 func TestRegisterAndDuplicateEmail(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir())
 	store := NewPGStore(pool)
-	auth, err := NewAuthService(store, cfg, NewModuleRegistry(), nil)
+	auth, err := NewAuthService(store, cfg, module.NewModuleRegistry(), nil)
 	if err != nil {
 		t.Fatalf("NewAuthService: %v", err)
 	}
@@ -103,32 +109,32 @@ func TestRegisterAndDuplicateEmail(t *testing.T) {
 
 	// Дубль email у іншому регістрі -> ERR_EMAIL_TAKEN
 	_, err = auth.Register(ctx, "user@example.com", "StrongPass123", "Olena2", "")
-	assertAppErrorCode(t, err, http.StatusConflict, ErrEmailTaken)
+	assertAppErrorCode(t, err, http.StatusConflict, apperr.ErrEmailTaken)
 
 	// Слабкий пароль (< 8) -> ERR_VALIDATION
 	_, err = auth.Register(ctx, "other@example.com", "short", "Olena", "")
-	assertAppErrorCode(t, err, http.StatusBadRequest, ErrValidation)
+	assertAppErrorCode(t, err, http.StatusBadRequest, apperr.ErrValidation)
 
 	// Задовгий пароль (> 72 байт) -> ERR_VALIDATION
 	_, err = auth.Register(ctx, "other2@example.com", strings.Repeat("a", 73), "Olena", "")
-	assertAppErrorCode(t, err, http.StatusBadRequest, ErrValidation)
+	assertAppErrorCode(t, err, http.StatusBadRequest, apperr.ErrValidation)
 
 	// Довжина полів: email > 254, name > 100, workspace_name > 100 -> ERR_VALIDATION
 	_, err = auth.Register(ctx, strings.Repeat("a", 246)+"@test.com", "StrongPass123", "Olena", "")
-	assertAppErrorCode(t, err, http.StatusBadRequest, ErrValidation)
+	assertAppErrorCode(t, err, http.StatusBadRequest, apperr.ErrValidation)
 
 	_, err = auth.Register(ctx, "valid1@example.com", "StrongPass123", strings.Repeat("а", 101), "")
-	assertAppErrorCode(t, err, http.StatusBadRequest, ErrValidation)
+	assertAppErrorCode(t, err, http.StatusBadRequest, apperr.ErrValidation)
 
 	_, err = auth.Register(ctx, "valid2@example.com", "StrongPass123", "Olena", strings.Repeat("б", 101))
-	assertAppErrorCode(t, err, http.StatusBadRequest, ErrValidation)
+	assertAppErrorCode(t, err, http.StatusBadRequest, apperr.ErrValidation)
 }
 
 func TestLoginSecurityAndBruteForceLock(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir())
 	store := NewPGStore(pool)
-	auth, err := NewAuthService(store, cfg, NewModuleRegistry(), nil)
+	auth, err := NewAuthService(store, cfg, module.NewModuleRegistry(), nil)
 	if err != nil {
 		t.Fatalf("NewAuthService: %v", err)
 	}
@@ -144,8 +150,8 @@ func TestLoginSecurityAndBruteForceLock(t *testing.T) {
 	// Невідомий email та хибний пароль дають однакову відповідь
 	_, errUnknown := auth.Login(ctx, "nobody@example.com", "WrongPass123", "1.2.3.4")
 	_, errWrong := auth.Login(ctx, "ivan@example.com", "WrongPass123", "1.2.3.4")
-	assertAppErrorCode(t, errUnknown, http.StatusUnauthorized, ErrInvalidCredentials)
-	assertAppErrorCode(t, errWrong, http.StatusUnauthorized, ErrInvalidCredentials)
+	assertAppErrorCode(t, errUnknown, http.StatusUnauthorized, apperr.ErrInvalidCredentials)
+	assertAppErrorCode(t, errWrong, http.StatusUnauthorized, apperr.ErrInvalidCredentials)
 
 	// Добиваємо до LOGIN_MAX_ATTEMPTS = 3 помилок для ivan@example.com
 	_, _ = auth.Login(ctx, "ivan@example.com", "WrongPass123", "1.2.3.4")
@@ -153,7 +159,7 @@ func TestLoginSecurityAndBruteForceLock(t *testing.T) {
 
 	// Наступна спроба (навіть із ПРАВИЛЬНИМ паролем) -> 429 ERR_TOO_MANY_ATTEMPTS
 	_, errLocked := auth.Login(ctx, "ivan@example.com", "CorrectPass123", "1.2.3.4")
-	assertAppErrorCode(t, errLocked, http.StatusTooManyRequests, ErrTooManyAttempts)
+	assertAppErrorCode(t, errLocked, http.StatusTooManyRequests, apperr.ErrTooManyAttempts)
 
 	// Інша IP не блокується разом із першою (ключ email|IP)
 	resOtherIP, errOtherIP := auth.Login(ctx, "ivan@example.com", "CorrectPass123", "5.6.7.8")
@@ -212,9 +218,9 @@ func TestLoginSecurityAndBruteForceLock(t *testing.T) {
 }
 
 func TestJWTValidation(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir())
-	auth, err := NewAuthService(NewPGStore(pool), cfg, NewModuleRegistry(), nil)
+	auth, err := NewAuthService(NewPGStore(pool), cfg, module.NewModuleRegistry(), nil)
 	if err != nil {
 		t.Fatalf("NewAuthService: %v", err)
 	}
@@ -234,7 +240,7 @@ func TestJWTValidation(t *testing.T) {
 	// Прострочений токен -> 401
 	now = now.Add(cfg.JWTTTL + time.Minute)
 	_, err = auth.ParseToken(token)
-	assertAppErrorCode(t, err, http.StatusUnauthorized, ErrUnauthorized)
+	assertAppErrorCode(t, err, http.StatusUnauthorized, apperr.ErrUnauthorized)
 	now = time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 
 	// Чужий секрет -> 401
@@ -243,7 +249,7 @@ func TestJWTValidation(t *testing.T) {
 		ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 	}).SignedString([]byte("another-secret-key-at-least-16"))
 	_, err = auth.ParseToken(foreignTok)
-	assertAppErrorCode(t, err, http.StatusUnauthorized, ErrUnauthorized)
+	assertAppErrorCode(t, err, http.StatusUnauthorized, apperr.ErrUnauthorized)
 
 	// alg=none -> 401
 	noneTok, _ := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.RegisteredClaims{
@@ -251,7 +257,7 @@ func TestJWTValidation(t *testing.T) {
 		ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 	}).SignedString(jwt.UnsafeAllowNoneSignatureType)
 	_, err = auth.ParseToken(noneTok)
-	assertAppErrorCode(t, err, http.StatusUnauthorized, ErrUnauthorized)
+	assertAppErrorCode(t, err, http.StatusUnauthorized, apperr.ErrUnauthorized)
 
 	// Інший алгоритм HS384 -> 401
 	hs384Tok, _ := jwt.NewWithClaims(jwt.SigningMethodHS384, jwt.RegisteredClaims{
@@ -259,20 +265,20 @@ func TestJWTValidation(t *testing.T) {
 		ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 	}).SignedString([]byte(cfg.JWTSecret))
 	_, err = auth.ParseToken(hs384Tok)
-	assertAppErrorCode(t, err, http.StatusUnauthorized, ErrUnauthorized)
+	assertAppErrorCode(t, err, http.StatusUnauthorized, apperr.ErrUnauthorized)
 
 	// Токен без exp -> 401
 	noExpTok, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
 		Subject: "42",
 	}).SignedString([]byte(cfg.JWTSecret))
 	_, err = auth.ParseToken(noExpTok)
-	assertAppErrorCode(t, err, http.StatusUnauthorized, ErrUnauthorized)
+	assertAppErrorCode(t, err, http.StatusUnauthorized, apperr.ErrUnauthorized)
 }
 
 func TestTelegramLinkTokenFlow(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir())
-	auth, err := NewAuthService(NewPGStore(pool), cfg, NewModuleRegistry(), nil)
+	auth, err := NewAuthService(NewPGStore(pool), cfg, module.NewModuleRegistry(), nil)
 	if err != nil {
 		t.Fatalf("NewAuthService: %v", err)
 	}
@@ -303,34 +309,34 @@ func TestTelegramLinkTokenFlow(t *testing.T) {
 
 	// Одноразовість: повторне використання -> ERR_TELEGRAM_LINK_EXPIRED
 	_, err = auth.ConsumeTelegramLinkToken(ctx, link1.Token, 999001)
-	assertAppErrorCode(t, err, http.StatusBadRequest, ErrTelegramLinkExpired)
+	assertAppErrorCode(t, err, http.StatusBadRequest, apperr.ErrTelegramLinkExpired)
 
 	// Прострочений токен -> ERR_TELEGRAM_LINK_EXPIRED
 	if err := auth.store.CreateTelegramLinkToken(ctx, u2.User.ID, "expired-tok", time.Now().Add(-time.Minute)); err != nil {
 		t.Fatalf("seed expired token: %v", err)
 	}
 	_, err = auth.ConsumeTelegramLinkToken(ctx, "expired-tok", 999002)
-	assertAppErrorCode(t, err, http.StatusBadRequest, ErrTelegramLinkExpired)
+	assertAppErrorCode(t, err, http.StatusBadRequest, apperr.ErrTelegramLinkExpired)
 
 	// Повторна прив'язка того ж telegram_id іншому користувачу відхиляється
 	link2, _ := auth.CreateTelegramLink(ctx, u2.User.ID)
 	_, err = auth.ConsumeTelegramLinkToken(ctx, link2.Token, 999001)
-	assertAppErrorCode(t, err, http.StatusConflict, ErrValidation)
+	assertAppErrorCode(t, err, http.StatusConflict, apperr.ErrValidation)
 }
 
 func TestRegisterModuleSeedCompensation(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir())
 
 	var stdoutBuf bytes.Buffer
-	logger, err := NewLogger(cfg, WithLoggerStdout(&stdoutBuf))
+	logger, err := logging.NewLogger(cfg, logging.WithLoggerStdout(&stdoutBuf))
 	if err != nil {
-		t.Fatalf("NewLogger: %v", err)
+		t.Fatalf("logging.NewLogger: %v", err)
 	}
 	defer logger.Close()
 
 	mod := &seedFailModule{name: "finance", fail: true}
-	reg := NewModuleRegistry()
+	reg := module.NewModuleRegistry()
 	_ = reg.Register(mod)
 
 	store := NewPGStore(pool)
@@ -373,17 +379,17 @@ func (s *failingCompensationStore) DeleteUserAndWorkspace(_ context.Context, _, 
 }
 
 func TestRegisterCompensationFailureLogsError(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir())
 
 	var stdoutBuf bytes.Buffer
-	logger, err := NewLogger(cfg, WithLoggerStdout(&stdoutBuf))
+	logger, err := logging.NewLogger(cfg, logging.WithLoggerStdout(&stdoutBuf))
 	if err != nil {
-		t.Fatalf("NewLogger: %v", err)
+		t.Fatalf("logging.NewLogger: %v", err)
 	}
 	defer logger.Close()
 
-	reg := NewModuleRegistry()
+	reg := module.NewModuleRegistry()
 	_ = reg.Register(&seedFailModule{name: "finance", fail: true})
 
 	auth, err := NewAuthService(&failingCompensationStore{CoreStore: NewPGStore(pool)}, cfg, reg, logger)
@@ -392,7 +398,7 @@ func TestRegisterCompensationFailureLogsError(t *testing.T) {
 	}
 
 	_, err = auth.Register(context.Background(), "compfail@example.com", "StrongPass123", "User", "WS")
-	assertAppErrorCode(t, err, http.StatusInternalServerError, ErrInternal)
+	assertAppErrorCode(t, err, http.StatusInternalServerError, apperr.ErrInternal)
 
 	logs := stdoutBuf.String()
 	if !strings.Contains(logs, "register_compensation_failed") || !strings.Contains(logs, "error_id") {
@@ -404,17 +410,17 @@ func TestRegisterCompensationFailureLogsError(t *testing.T) {
 }
 
 func TestAuthLogsContainNoSecrets(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir())
 
 	var stdoutBuf bytes.Buffer
-	logger, err := NewLogger(cfg, WithLoggerStdout(&stdoutBuf))
+	logger, err := logging.NewLogger(cfg, logging.WithLoggerStdout(&stdoutBuf))
 	if err != nil {
-		t.Fatalf("NewLogger: %v", err)
+		t.Fatalf("logging.NewLogger: %v", err)
 	}
 	defer logger.Close()
 
-	auth, err := NewAuthService(NewPGStore(pool), cfg, NewModuleRegistry(), logger)
+	auth, err := NewAuthService(NewPGStore(pool), cfg, module.NewModuleRegistry(), logger)
 	if err != nil {
 		t.Fatalf("NewAuthService: %v", err)
 	}

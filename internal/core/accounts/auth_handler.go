@@ -1,4 +1,4 @@
-package core
+package accounts
 
 import (
 	"net"
@@ -6,18 +6,24 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+
+	"kasabot/internal/core/apperr"
+	"kasabot/internal/core/config"
+	"kasabot/internal/core/httpx"
+	"kasabot/internal/core/logging"
+	"kasabot/internal/core/reqctx"
 )
 
 // AuthHandler реалізує тонкі HTTP-хендлери для /auth/* та /workspaces/*.
 type AuthHandler struct {
 	auth   *AuthService
 	ws     *WorkspaceService
-	cfg    *Config
-	logger *Logger
+	cfg    *config.Config
+	logger *logging.Logger
 }
 
 // NewAuthHandler створює контролер авторизації та воркспейсів.
-func NewAuthHandler(auth *AuthService, ws *WorkspaceService, cfg *Config, logger *Logger) *AuthHandler {
+func NewAuthHandler(auth *AuthService, ws *WorkspaceService, cfg *config.Config, logger *logging.Logger) *AuthHandler {
 	return &AuthHandler{
 		auth:   auth,
 		ws:     ws,
@@ -59,17 +65,17 @@ type registerRequest struct {
 
 func (h *AuthHandler) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
-	if err := DecodeJSON(w, r, &req, h.cfg.MaxJSONBodyBytes); err != nil {
-		WriteAppError(w, r, h.logger, NewAppError(http.StatusBadRequest, ErrValidation, "invalid request body", err))
+	if err := httpx.DecodeJSON(w, r, &req, h.cfg.MaxJSONBodyBytes); err != nil {
+		httpx.WriteAppError(w, r, h.logger, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "invalid request body", err))
 		return
 	}
 
 	res, err := h.auth.Register(r.Context(), req.Email, req.Password, req.Name, req.WorkspaceName)
 	if err != nil {
-		WriteAppError(w, r, h.logger, err)
+		httpx.WriteAppError(w, r, h.logger, err)
 		return
 	}
-	WriteJSON(w, http.StatusCreated, res)
+	httpx.WriteJSON(w, http.StatusCreated, res)
 }
 
 type loginRequest struct {
@@ -79,47 +85,47 @@ type loginRequest struct {
 
 func (h *AuthHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
-	if err := DecodeJSON(w, r, &req, h.cfg.MaxJSONBodyBytes); err != nil {
-		WriteAppError(w, r, h.logger, NewAppError(http.StatusBadRequest, ErrValidation, "invalid request body", err))
+	if err := httpx.DecodeJSON(w, r, &req, h.cfg.MaxJSONBodyBytes); err != nil {
+		httpx.WriteAppError(w, r, h.logger, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "invalid request body", err))
 		return
 	}
 
 	res, err := h.auth.Login(r.Context(), req.Email, req.Password, extractClientIP(r))
 	if err != nil {
-		WriteAppError(w, r, h.logger, err)
+		httpx.WriteAppError(w, r, h.logger, err)
 		return
 	}
-	WriteJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 func (h *AuthHandler) handleMe(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromCtx(r.Context())
+	userID, ok := reqctx.UserIDFromCtx(r.Context())
 	if !ok {
-		WriteAppError(w, r, h.logger, NewAppError(http.StatusUnauthorized, ErrUnauthorized, "unauthorized", nil))
+		httpx.WriteAppError(w, r, h.logger, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrUnauthorized, "unauthorized", nil))
 		return
 	}
 
 	res, err := h.auth.Me(r.Context(), userID)
 	if err != nil {
-		WriteAppError(w, r, h.logger, err)
+		httpx.WriteAppError(w, r, h.logger, err)
 		return
 	}
-	WriteJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 func (h *AuthHandler) handleCreateTelegramLink(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromCtx(r.Context())
+	userID, ok := reqctx.UserIDFromCtx(r.Context())
 	if !ok {
-		WriteAppError(w, r, h.logger, NewAppError(http.StatusUnauthorized, ErrUnauthorized, "unauthorized", nil))
+		httpx.WriteAppError(w, r, h.logger, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrUnauthorized, "unauthorized", nil))
 		return
 	}
 
 	res, err := h.auth.CreateTelegramLink(r.Context(), userID)
 	if err != nil {
-		WriteAppError(w, r, h.logger, err)
+		httpx.WriteAppError(w, r, h.logger, err)
 		return
 	}
-	WriteJSON(w, http.StatusCreated, res)
+	httpx.WriteJSON(w, http.StatusCreated, res)
 }
 
 type createWorkspaceRequest struct {
@@ -128,65 +134,65 @@ type createWorkspaceRequest struct {
 }
 
 func (h *AuthHandler) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromCtx(r.Context())
+	userID, ok := reqctx.UserIDFromCtx(r.Context())
 	if !ok {
-		WriteAppError(w, r, h.logger, NewAppError(http.StatusUnauthorized, ErrUnauthorized, "unauthorized", nil))
+		httpx.WriteAppError(w, r, h.logger, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrUnauthorized, "unauthorized", nil))
 		return
 	}
 
 	var req createWorkspaceRequest
-	if err := DecodeJSON(w, r, &req, h.cfg.MaxJSONBodyBytes); err != nil {
-		WriteAppError(w, r, h.logger, NewAppError(http.StatusBadRequest, ErrValidation, "invalid request body", err))
+	if err := httpx.DecodeJSON(w, r, &req, h.cfg.MaxJSONBodyBytes); err != nil {
+		httpx.WriteAppError(w, r, h.logger, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "invalid request body", err))
 		return
 	}
 
 	ws, err := h.ws.CreateWorkspace(r.Context(), userID, req.Name, req.Currency)
 	if err != nil {
-		WriteAppError(w, r, h.logger, err)
+		httpx.WriteAppError(w, r, h.logger, err)
 		return
 	}
-	WriteJSON(w, http.StatusCreated, ws)
+	httpx.WriteJSON(w, http.StatusCreated, ws)
 }
 
 func (h *AuthHandler) handleActivateWorkspace(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromCtx(r.Context())
+	userID, ok := reqctx.UserIDFromCtx(r.Context())
 	if !ok {
-		WriteAppError(w, r, h.logger, NewAppError(http.StatusUnauthorized, ErrUnauthorized, "unauthorized", nil))
+		httpx.WriteAppError(w, r, h.logger, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrUnauthorized, "unauthorized", nil))
 		return
 	}
 
 	wsID, err := parsePositiveIDParam(r, "id")
 	if err != nil {
-		WriteAppError(w, r, h.logger, err)
+		httpx.WriteAppError(w, r, h.logger, err)
 		return
 	}
 
 	if err := h.ws.ActivateWorkspace(r.Context(), userID, wsID); err != nil {
-		WriteAppError(w, r, h.logger, err)
+		httpx.WriteAppError(w, r, h.logger, err)
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"active_workspace_id": wsID})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"active_workspace_id": wsID})
 }
 
 func (h *AuthHandler) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromCtx(r.Context())
+	userID, ok := reqctx.UserIDFromCtx(r.Context())
 	if !ok {
-		WriteAppError(w, r, h.logger, NewAppError(http.StatusUnauthorized, ErrUnauthorized, "unauthorized", nil))
+		httpx.WriteAppError(w, r, h.logger, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrUnauthorized, "unauthorized", nil))
 		return
 	}
 
 	wsID, err := parsePositiveIDParam(r, "id")
 	if err != nil {
-		WriteAppError(w, r, h.logger, err)
+		httpx.WriteAppError(w, r, h.logger, err)
 		return
 	}
 
 	res, err := h.ws.CreateInvite(r.Context(), userID, wsID)
 	if err != nil {
-		WriteAppError(w, r, h.logger, err)
+		httpx.WriteAppError(w, r, h.logger, err)
 		return
 	}
-	WriteJSON(w, http.StatusCreated, res)
+	httpx.WriteJSON(w, http.StatusCreated, res)
 }
 
 type joinWorkspaceRequest struct {
@@ -194,31 +200,31 @@ type joinWorkspaceRequest struct {
 }
 
 func (h *AuthHandler) handleJoinWorkspace(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromCtx(r.Context())
+	userID, ok := reqctx.UserIDFromCtx(r.Context())
 	if !ok {
-		WriteAppError(w, r, h.logger, NewAppError(http.StatusUnauthorized, ErrUnauthorized, "unauthorized", nil))
+		httpx.WriteAppError(w, r, h.logger, apperr.NewAppError(http.StatusUnauthorized, apperr.ErrUnauthorized, "unauthorized", nil))
 		return
 	}
 
 	var req joinWorkspaceRequest
-	if err := DecodeJSON(w, r, &req, h.cfg.MaxJSONBodyBytes); err != nil {
-		WriteAppError(w, r, h.logger, NewAppError(http.StatusBadRequest, ErrValidation, "invalid request body", err))
+	if err := httpx.DecodeJSON(w, r, &req, h.cfg.MaxJSONBodyBytes); err != nil {
+		httpx.WriteAppError(w, r, h.logger, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "invalid request body", err))
 		return
 	}
 
 	ws, err := h.ws.JoinWorkspace(r.Context(), userID, req.Code)
 	if err != nil {
-		WriteAppError(w, r, h.logger, err)
+		httpx.WriteAppError(w, r, h.logger, err)
 		return
 	}
-	WriteJSON(w, http.StatusOK, ws)
+	httpx.WriteJSON(w, http.StatusOK, ws)
 }
 
 func parsePositiveIDParam(r *http.Request, name string) (int64, error) {
 	raw := chi.URLParam(r, name)
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
-		return 0, NewAppError(http.StatusBadRequest, ErrValidation, "invalid "+name+" parameter", nil)
+		return 0, apperr.NewAppError(http.StatusBadRequest, apperr.ErrValidation, "invalid "+name+" parameter", nil)
 	}
 	return id, nil
 }

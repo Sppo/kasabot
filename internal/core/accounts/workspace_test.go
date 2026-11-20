@@ -1,4 +1,4 @@
-package core
+package accounts
 
 import (
 	"context"
@@ -7,15 +7,19 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"kasabot/internal/core/apperr"
+	"kasabot/internal/core/module"
+	"kasabot/internal/core/testkit"
 )
 
 func TestWorkspaceCreationLimitAndCompensation(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir()) // MaxWorkspacesPerUser = 2
 	store := NewPGStore(pool)
 
 	mod := &seedFailModule{name: "finance", fail: false}
-	reg := NewModuleRegistry()
+	reg := module.NewModuleRegistry()
 	_ = reg.Register(mod)
 
 	auth, _ := NewAuthService(store, cfg, reg, nil)
@@ -31,7 +35,7 @@ func TestWorkspaceCreationLimitAndCompensation(t *testing.T) {
 	// Якщо сід другого воркспейсу падає — новий воркспейс видаляється, а active_workspace_id не змінюється
 	mod.fail = true
 	_, err = wsSvc.CreateWorkspace(ctx, regRes.User.ID, "Сім'я", "UAH")
-	assertAppErrorCode(t, err, http.StatusInternalServerError, ErrInternal)
+	assertAppErrorCode(t, err, http.StatusInternalServerError, apperr.ErrInternal)
 
 	activeID, err := auth.GetActiveWorkspaceID(ctx, regRes.User.ID)
 	if err != nil || activeID != firstWSID {
@@ -50,19 +54,19 @@ func TestWorkspaceCreationLimitAndCompensation(t *testing.T) {
 
 	// Занадто довга назва воркспейсу (> 100) -> 400 ERR_VALIDATION
 	_, err = wsSvc.CreateWorkspace(ctx, regRes.User.ID, strings.Repeat("w", 101), "UAH")
-	assertAppErrorCode(t, err, http.StatusBadRequest, ErrValidation)
+	assertAppErrorCode(t, err, http.StatusBadRequest, apperr.ErrValidation)
 
 	// Спроба створити 3-й воркспейс при ліміті 2 -> 403 ERR_FORBIDDEN
 	_, err = wsSvc.CreateWorkspace(ctx, regRes.User.ID, "Третій", "UAH")
-	assertAppErrorCode(t, err, http.StatusForbidden, ErrForbidden)
+	assertAppErrorCode(t, err, http.StatusForbidden, apperr.ErrForbidden)
 }
 
 func TestWorkspaceInvitesAndJoin(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir())
 	store := NewPGStore(pool)
-	auth, _ := NewAuthService(store, cfg, NewModuleRegistry(), nil)
-	wsSvc := NewWorkspaceService(store, cfg, NewModuleRegistry(), nil)
+	auth, _ := NewAuthService(store, cfg, module.NewModuleRegistry(), nil)
+	wsSvc := NewWorkspaceService(store, cfg, module.NewModuleRegistry(), nil)
 	ctx := context.Background()
 
 	owner, _ := auth.Register(ctx, "owner@example.com", "StrongPass123", "Owner", "Сім'я")
@@ -84,18 +88,18 @@ func TestWorkspaceInvitesAndJoin(t *testing.T) {
 
 	// Одноразовість: інший користувач не може використати той самий код
 	_, err = wsSvc.JoinWorkspace(ctx, outsider.User.ID, inv.Code)
-	assertAppErrorCode(t, err, http.StatusBadRequest, ErrInviteInvalidOrExpired)
+	assertAppErrorCode(t, err, http.StatusBadRequest, apperr.ErrInviteInvalidOrExpired)
 
 	// Member не може створювати інвайт -> 403
 	_, err = wsSvc.CreateInvite(ctx, partner.User.ID, owner.Workspace.ID)
-	assertAppErrorCode(t, err, http.StatusForbidden, ErrForbidden)
+	assertAppErrorCode(t, err, http.StatusForbidden, apperr.ErrForbidden)
 
 	// Прострочений інвайт -> ERR_INVITE_INVALID_OR_EXPIRED
 	if err := store.CreateInvite(ctx, owner.Workspace.ID, "expired-inv", time.Now().Add(-time.Minute)); err != nil {
 		t.Fatalf("seed expired invite: %v", err)
 	}
 	_, err = wsSvc.JoinWorkspace(ctx, outsider.User.ID, "expired-inv")
-	assertAppErrorCode(t, err, http.StatusBadRequest, ErrInviteInvalidOrExpired)
+	assertAppErrorCode(t, err, http.StatusBadRequest, apperr.ErrInviteInvalidOrExpired)
 
 	// Повторний join уже існуючого учасника через новий інвайт проходить без дублювання
 	inv2, _ := wsSvc.CreateInvite(ctx, owner.User.ID, owner.Workspace.ID)
@@ -105,15 +109,15 @@ func TestWorkspaceInvitesAndJoin(t *testing.T) {
 
 	// Активація чужого воркспейсу -> 403
 	err = wsSvc.ActivateWorkspace(ctx, outsider.User.ID, owner.Workspace.ID)
-	assertAppErrorCode(t, err, http.StatusForbidden, ErrForbidden)
+	assertAppErrorCode(t, err, http.StatusForbidden, apperr.ErrForbidden)
 }
 
 func TestWorkspaceSubscriptionAndAIQuotas(t *testing.T) {
-	pool, _ := openTestSchemaPool(t)
+	pool, _ := testkit.OpenTestSchemaPool(t)
 	cfg := newAuthTestConfig(t, t.TempDir()) // TrialDailyAILimit=3, ActiveDailyAILimit=5
 	store := NewPGStore(pool)
-	auth, _ := NewAuthService(store, cfg, NewModuleRegistry(), nil)
-	wsSvc := NewWorkspaceService(store, cfg, NewModuleRegistry(), nil)
+	auth, _ := NewAuthService(store, cfg, module.NewModuleRegistry(), nil)
+	wsSvc := NewWorkspaceService(store, cfg, module.NewModuleRegistry(), nil)
 
 	now := time.Date(2026, 11, 20, 22, 0, 0, 0, cfg.DefaultLocation)
 	auth.now = func() time.Time { return now }
@@ -153,7 +157,7 @@ func TestWorkspaceSubscriptionAndAIQuotas(t *testing.T) {
 
 	// 4-й запит на тій самій добі -> 429 ERR_AI_QUOTA_EXCEEDED
 	err = wsSvc.EnsureAIAllowed(ctx, wsID)
-	assertAppErrorCode(t, err, http.StatusTooManyRequests, ErrAIQuotaExceeded)
+	assertAppErrorCode(t, err, http.StatusTooManyRequests, apperr.ErrAIQuotaExceeded)
 
 	// Зміна дня в DEFAULT_TIMEZONE (після півночі за Києвом) скидає лічильник
 	now = time.Date(2026, 11, 21, 0, 5, 0, 0, cfg.DefaultLocation)
@@ -182,5 +186,5 @@ func TestWorkspaceSubscriptionAndAIQuotas(t *testing.T) {
 	// Прострочений subscription_ends_at -> 402 ERR_SUBSCRIPTION_EXPIRED
 	now = regRes.Workspace.SubscriptionEndsAt.Add(time.Minute)
 	err = wsSvc.EnsureAIAllowed(ctx, wsID)
-	assertAppErrorCode(t, err, http.StatusPaymentRequired, ErrSubscriptionExpired)
+	assertAppErrorCode(t, err, http.StatusPaymentRequired, apperr.ErrSubscriptionExpired)
 }

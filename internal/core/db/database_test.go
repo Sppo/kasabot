@@ -1,4 +1,4 @@
-package core
+package db
 
 import (
 	"context"
@@ -11,19 +11,23 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gopkg.in/telebot.v3"
+
+	"kasabot/internal/core/config"
+	"kasabot/internal/core/logging"
+	"kasabot/internal/core/module"
 )
 
 const fallbackTestDatabaseURL = "postgres://kasabot:kasabot@127.0.0.1:5432/kasabot?sslmode=disable"
 
 type testModule struct {
 	name       string
-	migrations []Migration
+	migrations []module.Migration
 }
 
-func (m *testModule) Name() string                { return m.name }
-func (m *testModule) Migrations() []Migration     { return m.migrations }
-func (m *testModule) RegisterRoutes(_ chi.Router) {}
-func (m *testModule) RegisterBot(_ *telebot.Bot)  {}
+func (m *testModule) Name() string                   { return m.name }
+func (m *testModule) Migrations() []module.Migration { return m.migrations }
+func (m *testModule) RegisterRoutes(_ chi.Router)    {}
+func (m *testModule) RegisterBot(_ *telebot.Bot)     {}
 func (m *testModule) OnWorkspaceCreated(_ context.Context, _ int64) error {
 	return nil
 }
@@ -34,11 +38,11 @@ func openTestSchemaPool(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
 
 	t.Setenv("JWT_SECRET", "test-secret-at-least-16-chars")
-	cfg, err := LoadConfig("../../.env")
+	cfg, err := config.LoadConfig("../../../.env")
 	if err != nil {
 		// Якщо .env не створено локально, використовуємо стандартний рядок підключення з .env.example
 		t.Setenv("DATABASE_URL", fallbackTestDatabaseURL)
-		cfg, err = LoadConfig("")
+		cfg, err = config.LoadConfig("")
 		if err != nil {
 			t.Fatalf("load test config: %v", err)
 		}
@@ -56,7 +60,7 @@ func openTestSchemaPool(t *testing.T) (*pgxpool.Pool, string) {
 		t.Fatalf("PostgreSQL недоступний — запусти make db-up: %v", err)
 	}
 
-	schemaName := fmt.Sprintf("test_%d_%s", time.Now().UnixNano(), NewErrorID())
+	schemaName := fmt.Sprintf("test_%d_%s", time.Now().UnixNano(), logging.NewErrorID())
 	if _, err := adminPool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA %s", schemaName)); err != nil {
 		adminPool.Close()
 		t.Fatalf("create temp schema %s: %v", schemaName, err)
@@ -87,15 +91,15 @@ func openTestSchemaPool(t *testing.T) (*pgxpool.Pool, string) {
 		adminPool.Close()
 	})
 
-	if err := initCoreSchema(context.Background(), schemaPool); err != nil {
-		t.Fatalf("initCoreSchema failed: %v", err)
+	if err := InitCoreSchema(context.Background(), schemaPool); err != nil {
+		t.Fatalf("InitCoreSchema failed: %v", err)
 	}
 
 	return schemaPool, schemaName
 }
 
 func TestModuleRegistryUniqueness(t *testing.T) {
-	reg := NewModuleRegistry()
+	reg := module.NewModuleRegistry()
 
 	if err := reg.Register(nil); err == nil {
 		t.Fatal("expected error for nil module")
@@ -171,7 +175,7 @@ func TestRunModuleMigrationsIdempotency(t *testing.T) {
 
 	mod := &testModule{
 		name: "finance",
-		migrations: []Migration{
+		migrations: []module.Migration{
 			{
 				Version: 2,
 				Name:    "create_items",
@@ -185,7 +189,7 @@ func TestRunModuleMigrationsIdempotency(t *testing.T) {
 		},
 	}
 
-	if err := RunModuleMigrations(ctx, pool, []Module{mod}, nil); err != nil {
+	if err := RunModuleMigrations(ctx, pool, []module.Module{mod}, nil); err != nil {
 		t.Fatalf("first RunModuleMigrations failed: %v", err)
 	}
 
@@ -195,7 +199,7 @@ func TestRunModuleMigrationsIdempotency(t *testing.T) {
 	}
 
 	// Повторний запуск має бути ідемпотентним і не перезаписувати вже застосовані міграції
-	if err := RunModuleMigrations(ctx, pool, []Module{mod}, nil); err != nil {
+	if err := RunModuleMigrations(ctx, pool, []module.Module{mod}, nil); err != nil {
 		t.Fatalf("second RunModuleMigrations failed: %v", err)
 	}
 
@@ -221,7 +225,7 @@ func TestRunModuleMigrationsRollbackOnError(t *testing.T) {
 
 	mod := &testModule{
 		name: "finance",
-		migrations: []Migration{
+		migrations: []module.Migration{
 			{
 				Version: 1,
 				Name:    "valid_v1",
@@ -235,7 +239,7 @@ func TestRunModuleMigrationsRollbackOnError(t *testing.T) {
 		},
 	}
 
-	err := RunModuleMigrations(ctx, pool, []Module{mod}, nil)
+	err := RunModuleMigrations(ctx, pool, []module.Module{mod}, nil)
 	if err == nil {
 		t.Fatal("expected error on broken v2 migration, got nil")
 	}
@@ -267,7 +271,7 @@ func TestRunModuleMigrationsConcurrentLock(t *testing.T) {
 
 	mod := &testModule{
 		name: "finance",
-		migrations: []Migration{
+		migrations: []module.Migration{
 			{
 				Version: 1,
 				Name:    "concurrent_table",
@@ -284,7 +288,7 @@ func TestRunModuleMigrationsConcurrentLock(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- RunModuleMigrations(ctx, pool, []Module{mod}, nil)
+			errs <- RunModuleMigrations(ctx, pool, []module.Module{mod}, nil)
 		}()
 	}
 	wg.Wait()
@@ -320,7 +324,7 @@ func TestRunModuleMigrationsCanceledContextReleasesLock(t *testing.T) {
 
 	mod := &testModule{
 		name: "finance",
-		migrations: []Migration{
+		migrations: []module.Migration{
 			{
 				Version: 1,
 				Name:    "slow_migration",
@@ -329,7 +333,7 @@ func TestRunModuleMigrationsCanceledContextReleasesLock(t *testing.T) {
 		},
 	}
 
-	err := RunModuleMigrations(cancelCtx, pool, []Module{mod}, nil)
+	err := RunModuleMigrations(cancelCtx, pool, []module.Module{mod}, nil)
 	if err == nil {
 		t.Fatal("expected error when context is canceled during migration")
 	}
@@ -355,7 +359,7 @@ func TestInitCoreSchemaConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- initCoreSchema(ctx, pool)
+			errs <- InitCoreSchema(ctx, pool)
 		}()
 	}
 	wg.Wait()
@@ -363,7 +367,7 @@ func TestInitCoreSchemaConcurrent(t *testing.T) {
 
 	for err := range errs {
 		if err != nil {
-			t.Fatalf("concurrent initCoreSchema failed: %v", err)
+			t.Fatalf("concurrent InitCoreSchema failed: %v", err)
 		}
 	}
 
